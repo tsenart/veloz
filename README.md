@@ -73,3 +73,16 @@ func main() {
     fmt.Println(utf8.ValidString(string([]byte{0xff})))    // false (invalid UTF-8)
 }
 ```
+
+## Benchmarks
+
+| Function           | CPU        | naive (MB/s) | veloz (MB/s) | Speedup |
+|--------------------|------------|--------------|--------------|---------|
+| ascii.ValidString  | Graviton 2 | 4,903        | 33,684       | 6.9x    |
+| ascii.EqualFold    | Graviton 2 |   879        | 7,566        | 8.6x    |
+| ascii.IndexFold    | Graviton 2 | 2,652        | 7,947        | 3.0x    |
+| utf8.ValidString   | Graviton 2 |   618        | 3,090        | 5.0x    |
+| ascii.ValidString  | Apple M2   | 12,256       | 89,227       | 7.3x    |
+| ascii.EqualFold    | Apple M2   | 2,336        | 21,254       | 9.1x    |
+| ascii.IndexFold    | Apple M2   | 7,117        | 29,046       | 4.1x    |
+| utf8.ValidString   | Apple M2   | 1,673        | 10,014       | 6.0x    |

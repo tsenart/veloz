@@ -218,12 +218,14 @@ func BenchmarkValidStringTenJapaneseChars(b *testing.B) {
 
 func BenchmarkValidStringLongMostlyASCII(b *testing.B) {
 	b.Run("std", func(b *testing.B) {
+		b.SetBytes(int64(len(longStringMostlyASCII)))
 		for i := 0; i < b.N; i++ {
 			stdlib.ValidString(longStringMostlyASCII)
 		}
 	})
 
 	b.Run("simd", func(b *testing.B) {
+		b.SetBytes(int64(len(longStringMostlyASCII)))
 		for i := 0; i < b.N; i++ {
 			ValidString(longStringMostlyASCII)
 		}
@@ -232,12 +234,14 @@ func BenchmarkValidStringLongMostlyASCII(b *testing.B) {
 
 func BenchmarkValidStringLongJapanese(b *testing.B) {
 	b.Run("std", func(b *testing.B) {
+		b.SetBytes(int64(len(longStringJapanese)))
 		for i := 0; i < b.N; i++ {
 			stdlib.ValidString(longStringJapanese)
 		}
 	})
 
 	b.Run("simd", func(b *testing.B) {
+		b.SetBytes(int64(len(longStringJapanese)))
 		for i := 0; i < b.N; i++ {
 			ValidString(longStringJapanese)
 		}
