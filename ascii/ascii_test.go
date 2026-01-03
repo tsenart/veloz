@@ -228,7 +228,7 @@ func TestEqualFold(t *testing.T) {
 	}
 }
 
-func BenchmarkAscii(b *testing.B) {
+func BenchmarkAsciiValid(b *testing.B) {
 	for _, n := range []int{1, 7, 15, 44, 100, 1000} {
 		asciiBuf := makeASCII(n)
 		asciiStr := string(asciiBuf)

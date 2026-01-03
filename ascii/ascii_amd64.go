@@ -22,7 +22,10 @@ func ValidString(s string) bool {
 }
 
 func IndexMask(s string, mask byte) int {
-	// TODO: implement acceleration for this
+	if hasAVX2 {
+		return indexMaskAvx(s, mask)
+	}
+
 	return indexMaskGo(s, mask)
 }
 

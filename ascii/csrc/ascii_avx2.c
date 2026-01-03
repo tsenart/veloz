@@ -220,3 +220,157 @@ bool equal_fold_avx2(const char *a, uint64_t a_len, const char *b, uint64_t b_le
 
     return _mm256_testc_si256(eq, all_ones);
 }
+
+// gocc: indexMaskAvx(data string, mask byte) int
+int64_t index_mask_avx(unsigned char *data, uint64_t length, uint8_t mask)
+{
+    const unsigned char *data_start = data;
+
+    if (length >= 16)
+    {
+        const __m256i mask_vec = _mm256_set1_epi8(mask);
+        const __m256i zero = _mm256_setzero_si256();
+
+        // Process 128 bytes at a time (4 x 32 bytes)
+        for (const unsigned char *data128_end = (data + length) - (length % 128); data < data128_end; data += 128)
+        {
+            __m256i v0 = _mm256_loadu_si256((const __m256i *)(data));
+            __m256i v1 = _mm256_loadu_si256((const __m256i *)(data + 32));
+            __m256i v2 = _mm256_loadu_si256((const __m256i *)(data + 64));
+            __m256i v3 = _mm256_loadu_si256((const __m256i *)(data + 96));
+
+            __m256i combined = _mm256_or_si256(_mm256_or_si256(v0, v1),
+                                               _mm256_or_si256(v2, v3));
+
+            // If no bytes have any bits set that match the mask, continue
+            if (_mm256_testz_si256(combined, mask_vec))
+            {
+                continue;
+            }
+
+            // Find which byte has the match
+            __m256i t0 = _mm256_and_si256(v0, mask_vec);
+            int cmp0 = _mm256_movemask_epi8(_mm256_cmpeq_epi8(t0, zero));
+            int match0 = ~cmp0;
+            if (match0) {
+                return (data - data_start) + __builtin_ctz(match0);
+            }
+
+            __m256i t1 = _mm256_and_si256(v1, mask_vec);
+            int cmp1 = _mm256_movemask_epi8(_mm256_cmpeq_epi8(t1, zero));
+            int match1 = ~cmp1;
+            if (match1) {
+                return (data - data_start) + 32 + __builtin_ctz(match1);
+            }
+
+            __m256i t2 = _mm256_and_si256(v2, mask_vec);
+            int cmp2 = _mm256_movemask_epi8(_mm256_cmpeq_epi8(t2, zero));
+            int match2 = ~cmp2;
+            if (match2) {
+                return (data - data_start) + 64 + __builtin_ctz(match2);
+            }
+
+            __m256i t3 = _mm256_and_si256(v3, mask_vec);
+            int cmp3 = _mm256_movemask_epi8(_mm256_cmpeq_epi8(t3, zero));
+            int match3 = ~cmp3;
+            // This must have a match since combined had one
+            return (data - data_start) + 96 + __builtin_ctz(match3);
+        }
+        length %= 128;
+
+        // Process 32 bytes at a time
+        for (const unsigned char *data32_end = (data + length) - (length % 32); data < data32_end; data += 32)
+        {
+            __m256i chunk = _mm256_loadu_si256((const __m256i *)(data));
+
+            if (_mm256_testz_si256(chunk, mask_vec))
+            {
+                continue;
+            }
+
+            __m256i result = _mm256_and_si256(chunk, mask_vec);
+            int cmp_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(result, zero));
+            int match_mask = ~cmp_mask;
+            return (data - data_start) + __builtin_ctz(match_mask);
+        }
+        length %= 32;
+
+        // Process remaining 16 bytes
+        if (length >= 16)
+        {
+            __m128i mask_vec_128 = _mm256_castsi256_si128(mask_vec);
+            __m128i zero_128 = _mm256_castsi256_si128(zero);
+            __m128i chunk = _mm_loadu_si128((const __m128i *)(data));
+
+            if (!_mm_testz_si128(chunk, mask_vec_128))
+            {
+                __m128i result = _mm_and_si128(chunk, mask_vec_128);
+                int cmp_mask = _mm_movemask_epi8(_mm_cmpeq_epi8(result, zero_128));
+                int match_mask = (~cmp_mask) & 0xFFFF;
+                return (data - data_start) + __builtin_ctz(match_mask);
+            }
+            data += 16;
+            length -= 16;
+        }
+    }
+
+    // Scalar fallback for remaining bytes (0-15 bytes)
+    uint32_t mask32 = mask;
+    mask32 |= mask32 << 8;
+    mask32 |= mask32 << 16;
+
+    if (length >= 8)
+    {
+        uint64_t mask64 = mask32;
+        mask64 |= mask64 << 32;
+
+        uint64_t data64 = *(uint64_t *)(data);
+        data64 &= mask64;
+        if (data64 != 0)
+        {
+            return (data - data_start) + __builtin_ctzll(data64) / 8;
+        }
+        data += 8;
+        length -= 8;
+    }
+
+    uint32_t data32;
+
+    if (length >= 4)
+    {
+        data32 = *(uint32_t *)(data);
+        data32 &= mask32;
+        if (data32 != 0)
+        {
+            return (data - data_start) + __builtin_ctz(data32) / 8;
+        }
+        data += 4;
+        length -= 4;
+    }
+
+    // Handle the remaining bytes (if any)
+    switch (length)
+    {
+    case 3:
+        data32 = *(uint16_t *)(data);
+        data32 |= data[2] << 16;
+        break;
+    case 2:
+        data32 = *(uint16_t *)(data);
+        break;
+    case 1:
+        data32 = (uint32_t)*data;
+        break;
+    default:
+        data32 = 0;
+        break;
+    }
+
+    data32 &= mask32;
+    if (data32)
+    {
+        return (data - data_start) + __builtin_ctz(data32) / 8;
+    }
+
+    return -1;
+}

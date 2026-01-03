@@ -9,3 +9,6 @@ func isAsciiAvx(src string) bool
 
 //go:noescape
 func equalFoldAvx(a string, b string) bool
+
+//go:noescape
+func indexMaskAvx(data string, mask byte) int
