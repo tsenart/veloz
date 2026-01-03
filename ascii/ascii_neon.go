@@ -14,7 +14,7 @@ func IndexMask(data string, mask byte) int
 func EqualFold(a string, b string) bool
 
 //go:noescape
-func IndexFoldRabinKarp(a string, b string) int
+func indexFoldRabinKarp(a string, b string) int
 
 //go:noescape
 func IndexFold(a string, b string) int

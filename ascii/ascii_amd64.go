@@ -42,7 +42,7 @@ func IndexFold(a, b string) int {
 	return indexFoldGo(a, b)
 }
 
-func IndexFoldRabinKarp(a, b string) int {
+func indexFoldRabinKarp(a, b string) int {
 	// FIXME: definitely not Rabin-Karp
 	return indexFoldGo(a, b)
 }

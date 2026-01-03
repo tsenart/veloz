@@ -645,7 +645,7 @@ static inline uint64_t index_fold_process_block(uint8x16_t data, uint8x16_t data
     return vget_lane_u64(narrowed, 0);
 }
 
-// gocc: IndexFoldRabinKarp(a, b string) int
+// gocc: indexFoldRabinKarp(a, b string) int
 int64_t index_fold_rabin_karp(unsigned char *haystack, const int64_t haystack_len, unsigned char *needle, const int64_t needle_len)
 {
     const uint64_t blockSize = 16; // NEON can process 128 bits (16 bytes) at a time

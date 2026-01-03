@@ -434,7 +434,7 @@ LBB2_21:
 	MOVB  R0, ret+32(FP)                 // <--
 	RET                                  // <--                                  // ret
 
-TEXT ·IndexFoldRabinKarp(SB), NOSPLIT, $0-40
+TEXT ·indexFoldRabinKarp(SB), NOSPLIT, $0-40
 	MOVD haystack+0(FP), R0
 	MOVD haystack_len+8(FP), R1
 	MOVD needle+16(FP), R2

@@ -190,8 +190,8 @@ func TestContainsFold(t *testing.T) {
 			t.Errorf("IndexFold(%s, %s) = %v, want %v",
 				ct.str, ct.substr, idx, want)
 		}
-		if idx := IndexFoldRabinKarp(ct.str, ct.substr); idx != want {
-			t.Errorf("IndexFoldRabinKarp(%s, %s) = %v, want %v",
+		if idx := indexFoldRabinKarp(ct.str, ct.substr); idx != want {
+			t.Errorf("indexFoldRabinKarp(%s, %s) = %v, want %v",
 				ct.str, ct.substr, idx, want)
 		}
 	}
@@ -224,6 +224,94 @@ func TestEqualFold(t *testing.T) {
 		}
 		if out := EqualFold(tt.t, tt.s); out != tt.out {
 			t.Errorf("EqualFold(%#q, %#q) = %v, want %v", tt.t, tt.s, out, tt.out)
+		}
+	}
+}
+
+func TestHasPrefixFold(t *testing.T) {
+	tests := []struct {
+		s, prefix string
+		want      bool
+	}{
+		// Empty cases
+		{"", "", true},
+		{"abc", "", true},
+		{"", "a", false},
+
+		// Exact match cases
+		{"abc", "abc", true},
+		{"abc", "ab", true},
+		{"abc", "a", true},
+
+		// Case insensitive matches
+		{"ABC", "abc", true},
+		{"abc", "ABC", true},
+		{"Hello World", "hello", true},
+		{"hello world", "HELLO", true},
+		{"HeLLo", "hElLo", true},
+
+		// Non-matches
+		{"abc", "xyz", false},
+		{"abc", "bc", false},
+		{"hello", "world", false},
+		{"abc", "abcd", false}, // prefix longer than string
+
+		// Various lengths
+		{"abcdefghijklmnop", "ABCDEFGH", true},
+		{"abcdefghijklmnop", "ABCDEFGHIJKLMNOP", true},
+		{"abcdefghijklmnop", "ABCDEFGHIJKLMNOPQ", false},
+		{"0123456789", "0123", true},
+		{"0123456789", "0123456789", true},
+		{"0123456789", "01onal", false},
+	}
+
+	for _, tt := range tests {
+		if got := HasPrefixFold(tt.s, tt.prefix); got != tt.want {
+			t.Errorf("HasPrefixFold(%q, %q) = %v, want %v", tt.s, tt.prefix, got, tt.want)
+		}
+	}
+}
+
+func TestHasSuffixFold(t *testing.T) {
+	tests := []struct {
+		s, suffix string
+		want      bool
+	}{
+		// Empty cases
+		{"", "", true},
+		{"abc", "", true},
+		{"", "a", false},
+
+		// Exact match cases
+		{"abc", "abc", true},
+		{"abc", "bc", true},
+		{"abc", "c", true},
+
+		// Case insensitive matches
+		{"ABC", "abc", true},
+		{"abc", "ABC", true},
+		{"Hello World", "WORLD", true},
+		{"hello world", "World", true},
+		{"HeLLo", "hElLo", true},
+
+		// Non-matches
+		{"abc", "xyz", false},
+		{"abc", "ab", false},
+		{"hello", "world", false},
+		{"abc", "zabc", false}, // suffix longer than string
+
+		// Various lengths
+		{"abcdefghijklmnop", "IJKLMNOP", true},
+		{"abcdefghijklmnop", "ABCDEFGHIJKLMNOP", true},
+		{"abcdefghijklmnop", "XABCDEFGHIJKLMNOP", false},
+		{"0123456789", "6789", true},
+		{"0123456789", "0123456789", true},
+		{"0123456789", "onal6789", false},
+	}
+
+	for _, tt := range tests {
+		if got := HasSuffixFold(tt.s, tt.suffix); got != tt.want {
+			t.Errorf("HasSuffixFold(%q, %q) = %v, want %v", tt.s, tt.suffix, got, tt.want)
 		}
 	}
 }
@@ -437,9 +525,9 @@ func FuzzIndexFold(f *testing.F) {
 			t.Fatalf("IndexFold(%q, %q) = %v; want %v", istr, isubstr, res, goRes)
 		}
 
-		res = IndexFoldRabinKarp(istr, isubstr)
+		res = indexFoldRabinKarp(istr, isubstr)
 		if res != goRes {
-			t.Fatalf("IndexFoldRabinKarp(%q, %q) = %v; want %v", istr, isubstr, res, goRes)
+			t.Fatalf("indexFoldRabinKarp(%q, %q) = %v; want %v", istr, isubstr, res, goRes)
 		}
 	})
 }
