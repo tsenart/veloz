@@ -27,8 +27,11 @@ func IndexMask(s string, mask byte) int {
 }
 
 func EqualFold(a, b string) bool {
-	// TODO: implement acceleration for this
-	return equalFoldGo(a, b)
+	if len(a) < 32 || !hasAVX2 {
+		return equalFoldGo(a, b)
+	}
+
+	return equalFoldAvx(a, b)
 }
 
 func IndexFold(a, b string) int {

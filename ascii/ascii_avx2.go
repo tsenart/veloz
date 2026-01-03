@@ -6,3 +6,6 @@ package ascii
 
 //go:noescape
 func isAsciiAvx(src string) bool
+
+//go:noescape
+func equalFoldAvx(a string, b string) bool
