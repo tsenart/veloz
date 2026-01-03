@@ -4,7 +4,7 @@ Veloz is a high-performance SIMD-accelerated library for ASCII and UTF-8 string 
 
 While amd64 SIMD optimizations are becoming common in the Go ecosystem, arm64 (NEON) support is often overlooked. Veloz focuses on providing first-class SIMD acceleration for arm64, making it ideal for deployment on ARM-based servers like AWS Graviton, Apple Silicon, and other ARM platforms.
 
-The SIMD implementations are written in C and transpiled to Go assembly using [gocc](https://github.com/mhr3/gocc).
+Another motivation for veloz is maintainability. Many Go packages rely on hand-rolled assembly for performance-critical code, which is notoriously difficult to maintain, debug, and extend. By writing SIMD implementations in C and transpiling them to Go assembly using [gocc](https://github.com/mhr3/gocc), veloz keeps the source code readable and maintainable while still delivering native performance.
 
 ## Features
 
