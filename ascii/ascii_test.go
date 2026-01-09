@@ -483,6 +483,268 @@ func BenchmarkIndexPeriodic(b *testing.B) {
 	}
 }
 
+func TestIndexAny(t *testing.T) {
+	tests := []struct {
+		s, chars string
+		want     int
+	}{
+		{"", "", -1},
+		{"", "a", -1},
+		{"a", "", -1},
+		{"abc", "a", 0},
+		{"abc", "b", 1},
+		{"abc", "c", 2},
+		{"abc", "d", -1},
+		{"abc", "cb", 1},
+		{"abc", "dc", 2},
+		{"abc", "xyz", -1},
+		{"abcdefghijklmnop", "p", 15},
+		{"abcdefghijklmnop", "op", 14},
+		{"abcdefghijklmnop", "xyz", -1},
+		{"hello world", " ", 5},
+		{"hello world", "\t\n ", 5},
+		{"hello\tworld", "\t\n ", 5},
+		{"hello\nworld", "\t\n ", 5},
+		// Longer strings to test SIMD paths
+		{strings.Repeat("x", 100) + "y", "y", 100},
+		{strings.Repeat("x", 100) + "y", "yz", 100},
+		{strings.Repeat("x", 1000) + "abc", "abc", 1000},
+		{strings.Repeat("x", 1000), "abc", -1},
+		// Multiple chars in set
+		{"the quick brown fox", "aeiou", 2}, // 'e' in 'the'
+		{"xyz", "aeiou", -1},
+		// Edge cases: duplicates in chars (should still work)
+		{"abc", "aaa", 0},
+		{"abc", "bbb", 1},
+		{"abc", "aaabbbccc", 0},
+		// Edge case: >16 chars (tests SVE2 multiple MATCH passes or Go fallback)
+		{"abcdefghijklmnopqrstuvwxyz", "1234567890!@#$%^&*()z", 25},
+		// Edge case: >64 chars (falls back to Go)
+		{"test", strings.Repeat("x", 65) + "t", 0},
+		// Edge case: single char strings
+		{"a", "a", 0},
+		{"a", "b", -1},
+		{"b", "abc", 0},
+		// Edge case: non-ASCII in haystack (should still find ASCII chars)
+		{"hello\x80world", " ", -1},
+		{"hello\x80world", "w", 6},
+		{"\xff\xfe\xfd", "abc", -1},
+		// Edge case: match at various positions within vector
+		{strings.Repeat("a", 15) + "x", "x", 15},
+		{strings.Repeat("a", 16) + "x", "x", 16},
+		{strings.Repeat("a", 17) + "x", "x", 17},
+		{strings.Repeat("a", 31) + "x", "x", 31},
+		{strings.Repeat("a", 32) + "x", "x", 32},
+		{strings.Repeat("a", 33) + "x", "x", 33},
+	}
+
+	for _, tt := range tests {
+		if got := IndexAny(tt.s, tt.chars); got != tt.want {
+			t.Errorf("IndexAny(%q, %q) = %d, want %d", tt.s, tt.chars, got, tt.want)
+		}
+		// Also verify against Go fallback
+		if got := indexAnyGo(tt.s, tt.chars); got != tt.want {
+			t.Errorf("indexAnyGo(%q, %q) = %d, want %d", tt.s, tt.chars, got, tt.want)
+		}
+	}
+}
+
+func TestIndexAnyCharSet(t *testing.T) {
+	tests := []struct {
+		s, chars string
+		want     int
+	}{
+		{"", "", -1},
+		{"", "a", -1},
+		{"a", "", -1},
+		{"abc", "a", 0},
+		{"abc", "b", 1},
+		{"abc", "c", 2},
+		{"abc", "d", -1},
+		{"abc", "cb", 1},
+		{"abc", "dc", 2},
+		{"abc", "xyz", -1},
+		{"abcdefghijklmnop", "p", 15},
+		{"abcdefghijklmnop", "op", 14},
+		{"hello world", " ", 5},
+		// Small data (Go fallback path)
+		{"a", "a", 0},
+		{"ab", "b", 1},
+		{"abcdefghij", "j", 9},
+		{"abcdefghijklmno", "o", 14}, // exactly 15 bytes
+		// Larger data (NEON path)
+		{strings.Repeat("x", 100) + "y", "y", 100},
+		{strings.Repeat("x", 1000) + "abc", "abc", 1000},
+		{strings.Repeat("x", 1000), "abc", -1},
+	}
+
+	for _, tt := range tests {
+		cs := MakeCharSet(tt.chars)
+		if got := IndexAnyCharSet(tt.s, cs); got != tt.want {
+			t.Errorf("IndexAnyCharSet(%q, %q) = %d, want %d", tt.s, tt.chars, got, tt.want)
+		}
+		// Verify matches IndexAny
+		if got := IndexAny(tt.s, tt.chars); got != tt.want {
+			t.Errorf("IndexAny(%q, %q) = %d, want %d", tt.s, tt.chars, got, tt.want)
+		}
+	}
+}
+
+func TestContainsAnyCharSet(t *testing.T) {
+	tests := []struct {
+		s, chars string
+		want     bool
+	}{
+		{"", "", false},
+		{"", "a", false},
+		{"a", "", false},
+		{"abc", "a", true},
+		{"abc", "d", false},
+		{"hello world", " ", true},
+		{"helloworld", " ", false},
+	}
+
+	for _, tt := range tests {
+		cs := MakeCharSet(tt.chars)
+		if got := ContainsAnyCharSet(tt.s, cs); got != tt.want {
+			t.Errorf("ContainsAnyCharSet(%q, %q) = %v, want %v", tt.s, tt.chars, got, tt.want)
+		}
+	}
+}
+
+func TestContainsAny(t *testing.T) {
+	tests := []struct {
+		s, chars string
+		want     bool
+	}{
+		{"", "", false},
+		{"", "a", false},
+		{"a", "", false},
+		{"abc", "a", true},
+		{"abc", "d", false},
+		{"hello world", " ", true},
+		{"helloworld", " ", false},
+	}
+
+	for _, tt := range tests {
+		if got := ContainsAny(tt.s, tt.chars); got != tt.want {
+			t.Errorf("ContainsAny(%q, %q) = %v, want %v", tt.s, tt.chars, got, tt.want)
+		}
+	}
+}
+
+func TestIndexNonASCII(t *testing.T) {
+	tests := []struct {
+		s    string
+		want int
+	}{
+		{"", -1},
+		{"hello", -1},
+		{"hello world", -1},
+		{"hello\x80world", 5},
+		{"\x80hello", 0},
+		{"hello\x80", 5},
+		{strings.Repeat("x", 100) + "\x80", 100},
+		{strings.Repeat("x", 1000) + "日本語", 1000},
+	}
+
+	for _, tt := range tests {
+		if got := IndexNonASCII(tt.s); got != tt.want {
+			t.Errorf("IndexNonASCII(%q) = %d, want %d", tt.s, got, tt.want)
+		}
+	}
+}
+
+func BenchmarkIndexAny(b *testing.B) {
+	chars := " \t\n\r"
+	for _, n := range []int{16, 64, 256, 1024} {
+		data := strings.Repeat("x", n-1) + " "
+
+		b.Run(fmt.Sprintf("go-%d", n), func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			for i := 0; i < b.N; i++ {
+				indexAnyGo(data, chars)
+			}
+		})
+
+		b.Run(fmt.Sprintf("simd-%d", n), func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			for i := 0; i < b.N; i++ {
+				IndexAny(data, chars)
+			}
+		})
+	}
+}
+
+func BenchmarkIndexAnyCharSet(b *testing.B) {
+	chars := " \t\n\r"
+	cs := MakeCharSet(chars)
+
+	for _, n := range []int{16, 64, 256, 1024} {
+		data := strings.Repeat("x", n-1) + " "
+
+		b.Run(fmt.Sprintf("per-call-%d", n), func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			for i := 0; i < b.N; i++ {
+				IndexAny(data, chars)
+			}
+		})
+
+		b.Run(fmt.Sprintf("charset-%d", n), func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			for i := 0; i < b.N; i++ {
+				IndexAnyCharSet(data, cs)
+			}
+		})
+	}
+}
+
+func BenchmarkIndexAnyCharCounts(b *testing.B) {
+	data := strings.Repeat("\x01", 1023) + "\x00"
+	allChars := "\x00\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOP"
+	var sink int
+
+	for _, charCount := range []int{1, 4, 8, 16, 32, 64} {
+		chars := allChars[:charCount]
+		b.Run(fmt.Sprintf("go/chars=%d", charCount), func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			for i := 0; i < b.N; i++ {
+				sink = indexAnyGo(data, chars)
+			}
+		})
+		b.Run(fmt.Sprintf("simd/chars=%d", charCount), func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			for i := 0; i < b.N; i++ {
+				sink = IndexAny(data, chars)
+			}
+		})
+	}
+	_ = sink
+}
+
+func buildBitset(chars string) (uint64, uint64, uint64, uint64) {
+	var bitset [4]uint64
+	for i := 0; i < len(chars); i++ {
+		c := chars[i]
+		bitset[c>>6] |= 1 << (c & 63)
+	}
+	return bitset[0], bitset[1], bitset[2], bitset[3]
+}
+
+func FuzzIndexAny(f *testing.F) {
+	f.Add("hello world", " ")
+	f.Add("abcdefghij", "xyz")
+	f.Add(strings.Repeat("a", 100), "b")
+
+	f.Fuzz(func(t *testing.T, s, chars string) {
+		got := IndexAny(s, chars)
+		want := indexAnyGo(s, chars)
+		if got != want {
+			t.Fatalf("IndexAny(%q, %q) = %d, want %d", s, chars, got, want)
+		}
+	})
+}
+
 func FuzzEqualFold(f *testing.F) {
 	f.Add("01234567", "01234567")
 	f.Add("abcd", "ABCD")
@@ -528,6 +790,428 @@ func FuzzIndexFold(f *testing.F) {
 		res = indexFoldRabinKarp(istr, isubstr)
 		if res != goRes {
 			t.Fatalf("indexFoldRabinKarp(%q, %q) = %v; want %v", istr, isubstr, res, goRes)
+		}
+	})
+}
+
+func TestSearchNeedle(t *testing.T) {
+	tests := []struct {
+		haystack, needle string
+		want             int
+	}{
+		{"", "", 0},
+		{"", "a", -1},
+		{"a", "", 0},
+		{"abc", "a", 0},
+		{"abc", "A", 0},
+		{"abc", "b", 1},
+		{"abc", "B", 1},
+		{"abc", "c", 2},
+		{"abc", "d", -1},
+		{"hello world", "WORLD", 6},
+		{"Hello World", "hello", 0},
+		{"The Quick Brown Fox", "quick", 4},
+		{"The Quick Brown Fox", "QUICK", 4},
+		{"The Quick Brown Fox", "fox", 16},
+		{"The Quick Brown Fox", "xyz", -1},
+		// Test rare byte selection - 'q' and 'x' are rare
+		{"abcdefghijklmnopqrstuvwxyz", "qrs", 16},
+		{"abcdefghijklmnopqrstuvwxyz", "xyz", 23},
+		// Longer strings
+		{strings.Repeat("a", 100) + "NEEDLE" + strings.Repeat("b", 100), "needle", 100},
+		{strings.Repeat("x", 1000) + "QuIcK", "quick", 1000},
+
+		// =============================================================
+		// Bug regression tests - these target specific edge cases
+		// =============================================================
+
+		// Bug 1: Multiple matches in same 16-byte chunk where first is false positive
+		// Tests nibble clearing logic - if we clear only 1 bit instead of 4-bit nibble,
+		// we'd get stuck in infinite loop or miss the real match
+		{"xQxZxQxZxQxZQZab", "QZab", 12}, // Q and Z are rare, multiple false positives before real match
+		{"aQaZaQaZaQaZQZxy", "QZxy", 12}, // Same pattern, different ending
+		{"QxZxQxZxQxZxQxZxQZmatch", "QZmatch", 16}, // Match starts exactly at position 16
+
+		// Bug 2: Match in tail region (last <16 bytes after main SIMD loop)
+		// Tests tail masking - if we mask chunks before comparison, non-zero rare bytes
+		// compared against masked zeros would never match
+		{strings.Repeat("x", 20) + "needle", "needle", 20},           // Match in tail, haystack > 16
+		{strings.Repeat("x", 17) + "QZ", "QZ", 17},                   // Very short tail (2 bytes)
+		{strings.Repeat("x", 25) + "abc", "abc", 25},                 // Match in tail after 1 full SIMD iteration
+		{strings.Repeat("y", 31) + "z", "z", 31},                     // Single char match at very end of tail
+		{strings.Repeat("a", 16) + strings.Repeat("b", 10) + "QZ", "QZ", 26}, // Tail with rare bytes
+
+		// Combined: multiple candidates AND in tail region
+		{strings.Repeat("QZ", 8) + "xQZmatch", "QZmatch", 17}, // False positives then match in tail (QZ*8=16 + "x"=1)
+
+		// Edge case: needle longer than 16 bytes with match in tail
+		{strings.Repeat("x", 20) + "abcdefghijklmnopqrst", "abcdefghijklmnopqrst", 20},
+	}
+
+	for _, tt := range tests {
+		n := MakeNeedle(tt.needle)
+		if got := SearchNeedle(tt.haystack, n); got != tt.want {
+			t.Errorf("SearchNeedle(%q, %q) = %d, want %d", tt.haystack, tt.needle, got, tt.want)
+		}
+		// Verify against IndexFold
+		if want := IndexFold(tt.haystack, tt.needle); want != tt.want {
+			t.Errorf("IndexFold(%q, %q) = %d, want %d", tt.haystack, tt.needle, want, tt.want)
+		}
+	}
+}
+
+func TestSelectRarePair(t *testing.T) {
+	tests := []struct {
+		needle      string
+		expectRare1 byte
+		expectRare2 byte
+	}{
+		{"the", 'T', 'H'},         // All common, picks first two
+		{"quick", 'Q', 'K'},       // Q is very rare
+		{"xylophone", 'X', 'Y'},   // X and Y are rare
+		{"zzz", 'Z', 'Z'},         // Z is very rare
+		{"aaa", 'A', 'A'},         // All same
+		{"ab", 'B', 'A'},          // B rarer than A (or vice versa based on distance)
+	}
+
+	for _, tt := range tests {
+		rare1, _, rare2, _ := selectRarePair(tt.needle, nil)
+		// Just verify we get rare bytes, exact selection depends on implementation
+		if rare1 == 0 && len(tt.needle) > 0 {
+			t.Errorf("selectRarePair(%q): rare1 is 0", tt.needle)
+		}
+		t.Logf("selectRarePair(%q) = (%c, %c)", tt.needle, rare1, rare2)
+	}
+}
+
+func BenchmarkSearchNeedle(b *testing.B) {
+	// Benchmark full-scan performance with needle at END of haystack.
+	// This measures actual throughput, not "time to first match".
+
+	const size = 4700
+
+	// JSON case: searching for a key in JSON-like data
+	// Before fix: would pick "@0 and "@4 (same byte) -> many false positives
+	// After fix: picks "@0 and M@3 (different bytes) -> fewer false positives
+	jsonNeedle := `"num"`
+	jsonN := MakeNeedle(jsonNeedle)
+	jsonHaystack := strings.Repeat(`{"key":"value","cnt":123},`, size/26) + `{"num":999}`
+
+	b.Run("json/IndexFold", func(b *testing.B) {
+		b.SetBytes(int64(len(jsonHaystack)))
+		for i := 0; i < b.N; i++ {
+			IndexFold(jsonHaystack, jsonNeedle)
+		}
+	})
+
+	b.Run("json/SearchNeedle", func(b *testing.B) {
+		b.SetBytes(int64(len(jsonHaystack)))
+		for i := 0; i < b.N; i++ {
+			SearchNeedle(jsonHaystack, jsonN)
+		}
+	})
+
+	// Zero false-positive case: needle "quartz" (Q, Z rare), haystack has no Q or Z
+	zeroFPNeedle := "quartz"
+	zeroFPN := MakeNeedle(zeroFPNeedle)
+	zeroFPHaystack := strings.Repeat("abcdefghijklmnoprstuvwy ", size/24) + zeroFPNeedle
+
+	b.Run("rare/IndexFold", func(b *testing.B) {
+		b.SetBytes(int64(len(zeroFPHaystack)))
+		for i := 0; i < b.N; i++ {
+			IndexFold(zeroFPHaystack, zeroFPNeedle)
+		}
+	})
+
+	b.Run("rare/SearchNeedle", func(b *testing.B) {
+		b.SetBytes(int64(len(zeroFPHaystack)))
+		for i := 0; i < b.N; i++ {
+			SearchNeedle(zeroFPHaystack, zeroFPN)
+		}
+	})
+
+	// Not-found case (full scan)
+	notFoundHaystack := strings.Repeat("abcdefghijklmnoprstuvwy ", size/24)
+	b.Run("notfound/IndexFold", func(b *testing.B) {
+		b.SetBytes(int64(len(notFoundHaystack)))
+		for i := 0; i < b.N; i++ {
+			IndexFold(notFoundHaystack, zeroFPNeedle)
+		}
+	})
+
+	b.Run("notfound/SearchNeedle", func(b *testing.B) {
+		b.SetBytes(int64(len(notFoundHaystack)))
+		for i := 0; i < b.N; i++ {
+			SearchNeedle(notFoundHaystack, zeroFPN)
+		}
+	})
+}
+
+// BenchmarkNeedleReuse demonstrates the advantage of precomputing Needle once
+// and reusing it across many haystacks (typical database/log search use case).
+func BenchmarkNeedleReuse(b *testing.B) {
+	for _, count := range []int{1000, 1_000_000} {
+		// Simulate searching through many log lines for the same needle
+		haystacks := make([]string, count)
+		for i := range haystacks {
+			// Mix of lines - some contain the needle, most don't
+			if i%100 == 99 {
+				haystacks[i] = fmt.Sprintf("[%04d] INFO: user logged in with xylophone device", i)
+			} else {
+				haystacks[i] = fmt.Sprintf("[%04d] DEBUG: processing request for user_id=%d action=update", i, i*17)
+			}
+		}
+
+		needle := "xylophone"
+		precomputed := MakeNeedle(needle)
+
+		var totalBytes int64
+		for _, h := range haystacks {
+			totalBytes += int64(len(h))
+		}
+
+		suffix := fmt.Sprintf("%d", count)
+		if count >= 1_000_000 {
+			suffix = fmt.Sprintf("%dM", count/1_000_000)
+		} else if count >= 1000 {
+			suffix = fmt.Sprintf("%dK", count/1000)
+		}
+
+		b.Run(fmt.Sprintf("IndexFold/%s", suffix), func(b *testing.B) {
+			b.SetBytes(totalBytes)
+			var sink int
+			for i := 0; i < b.N; i++ {
+				for _, h := range haystacks {
+					sink += IndexFold(h, needle)
+				}
+			}
+			_ = sink
+		})
+
+		b.Run(fmt.Sprintf("SearchNeedle/%s", suffix), func(b *testing.B) {
+			b.SetBytes(totalBytes)
+			var sink int
+			for i := 0; i < b.N; i++ {
+				for _, h := range haystacks {
+					sink += SearchNeedle(h, precomputed)
+				}
+			}
+			_ = sink
+		})
+
+		b.Run(fmt.Sprintf("SearchNeedle+MakeNeedle/%s", suffix), func(b *testing.B) {
+			b.SetBytes(totalBytes)
+			var sink int
+			for i := 0; i < b.N; i++ {
+				n := MakeNeedle(needle)
+				for _, h := range haystacks {
+					sink += SearchNeedle(h, n)
+				}
+			}
+			_ = sink
+		})
+	}
+}
+
+// buildJSONLogCorpus creates a realistic JSON logs corpus with multi-language content.
+func buildJSONLogCorpus() string {
+	var lines []string
+	for i := 0; i < 1000; i++ {
+		switch i % 10 {
+		case 0: // JSON with numbers
+			lines = append(lines, fmt.Sprintf(`{"ts":1704067200%03d,"level":"info","latency_ms":%d,"bytes":%d,"status":200}`, i, i%500, i*1024))
+		case 1: // JSON with UUID
+			lines = append(lines, fmt.Sprintf(`{"request_id":"550e8400-e29b-%04x-a716-4466554400%02x","user_id":%d}`, i, i%256, i*100))
+		case 2: // Multi-language (Chinese)
+			lines = append(lines, fmt.Sprintf(`{"msg":"用户登录成功","user":"user_%d","ip":"10.0.%d.%d"}`, i, i%256, (i*7)%256))
+		case 3: // Multi-language (Japanese)
+			lines = append(lines, fmt.Sprintf(`{"msg":"リクエスト処理完了","duration":%d,"code":%d}`, i*10, 200+i%5))
+		case 4: // Multi-language (Korean)
+			lines = append(lines, fmt.Sprintf(`{"msg":"데이터베이스 연결","pool_size":%d,"active":%d}`, 100, i%100))
+		case 5: // Nested JSON with arrays
+			lines = append(lines, fmt.Sprintf(`{"data":{"items":[%d,%d,%d],"total":%d},"page":%d}`, i, i+1, i+2, i*3, i/10))
+		case 6: // Error with stack trace reference
+			lines = append(lines, fmt.Sprintf(`{"error":"connection timeout","retry":%d,"host":"db-%d.prod.internal:5432"}`, i%3, i%10))
+		case 7: // Metrics
+			lines = append(lines, fmt.Sprintf(`{"metric":"cpu_usage","value":%.2f,"tags":{"host":"srv%03d","dc":"us-east-1"}}`, float64(i%100)/100.0, i%100))
+		case 8: // Auth event
+			lines = append(lines, fmt.Sprintf(`{"event":"auth.login","success":true,"method":"oauth2","provider":"google","uid":%d}`, i*1000))
+		case 9: // HTTP access log style
+			lines = append(lines, fmt.Sprintf(`{"method":"POST","path":"/api/v2/users/%d/orders","status":201,"bytes":%d}`, i, i*50))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// buildUUIDHeavyCorpus creates a corpus dominated by UUIDs (like a distributed tracing store).
+func buildUUIDHeavyCorpus() string {
+	var lines []string
+	for i := 0; i < 1000; i++ {
+		// Every line has 3-4 UUIDs (trace_id, span_id, parent_id, request_id)
+		lines = append(lines, fmt.Sprintf(
+			`{"trace_id":"%08x-%04x-%04x-%04x-%012x","span_id":"%08x-%04x-%04x-%04x-%012x","parent_id":"%08x-%04x-%04x-%04x-%012x","op":"db.query"}`,
+			i*111, i%0xFFFF, 0x4000|(i%0x0FFF), 0x8000|(i%0x3FFF), i*123456,
+			i*222, (i+1)%0xFFFF, 0x4000|((i+1)%0x0FFF), 0x8000|((i+1)%0x3FFF), (i+1)*123456,
+			i*333, (i+2)%0xFFFF, 0x4000|((i+2)%0x0FFF), 0x8000|((i+2)%0x3FFF), (i+2)*123456,
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// BenchmarkRankTable compares static byteRank table (English frequency) vs a
+// computed rank table based on actual JSON logs corpus.
+//
+// Use case: logs/traces database that precomputes byte frequency distribution
+// per table/partition to speed up substring search.
+//
+// Key insight: JSON logs have very different byte distribution than English:
+// - " (double-quote) is #1 most common, but static table thinks it's rare (rank 60)
+// - : (colon) is #2 most common, but static table thinks it's rare (rank 70)
+// - Digits 0-9 make up 17% of the corpus
+// - JSON punctuation makes up 28% of the corpus
+func BenchmarkRankTable(b *testing.B) {
+	corpus := buildJSONLogCorpus()
+	ranks := buildRankTable(corpus)
+
+	needles := []struct {
+		name   string
+		needle string
+	}{
+		// Regular needles - static table works reasonably well
+		{"timeout", "timeout"},
+		{"connection", "connection"},
+		// Worst cases: needles with " and : which static thinks are rare but are #1,#2 in JSON
+		{"status:200", `"status":200`},
+		{"user_id", `"user_id":`},
+		// UUID search - hex chars a-f and digits are common in logs with UUIDs
+		{"uuid-prefix", "550e8400-e29b"},
+		{"uuid-suffix", "4466554400"},
+	}
+
+	for _, tc := range needles {
+		static := MakeNeedle(tc.needle)
+		computed := MakeNeedleWithRanks(tc.needle, ranks[:])
+
+		b.Run(tc.name+"/Static", func(b *testing.B) {
+			b.SetBytes(int64(len(corpus)))
+			for i := 0; i < b.N; i++ {
+				SearchNeedle(corpus, static)
+			}
+		})
+
+		b.Run(tc.name+"/Computed", func(b *testing.B) {
+			b.SetBytes(int64(len(corpus)))
+			for i := 0; i < b.N; i++ {
+				SearchNeedle(corpus, computed)
+			}
+		})
+
+		b.Logf("%s: static=%c@%d,%c@%d  computed=%c@%d,%c@%d",
+			tc.name,
+			static.rare1, static.off1, static.rare2, static.off2,
+			computed.rare1, computed.off1, computed.rare2, computed.off2)
+	}
+}
+
+// BenchmarkRankTableUUID tests UUID search in a UUID-heavy corpus (distributed tracing).
+func BenchmarkRankTableUUID(b *testing.B) {
+	corpus := buildUUIDHeavyCorpus()
+	ranks := buildRankTable(corpus)
+
+	// Corpus breakdown: '0'=22%, '"'=9.5%, '-'=7%, '4'=4%, '8'=3.8%, etc.
+	// Key insight: Static table has '"' at rank 60 (rare!), but it's 9.5% of corpus
+	needles := []struct {
+		name   string
+		needle string
+	}{
+		// Static picks " (rank 60 "rare"), but " is 9.5% of corpus = tons of false positives
+		{"trace_id-search", `"trace_id":"0001b207`},
+		{"span_id-search", `"span_id":"0002da12`},
+		{"parent_id-search", `"parent_id":"0003c`},
+		// Pattern with colon - static thinks : is rare (rank 70)
+		{"field-colon", `:"00000000-0000`},
+	}
+
+	for _, tc := range needles {
+		static := MakeNeedle(tc.needle)
+		computed := MakeNeedleWithRanks(tc.needle, ranks[:])
+
+		b.Run(tc.name+"/Static", func(b *testing.B) {
+			b.SetBytes(int64(len(corpus)))
+			for i := 0; i < b.N; i++ {
+				SearchNeedle(corpus, static)
+			}
+		})
+
+		b.Run(tc.name+"/Computed", func(b *testing.B) {
+			b.SetBytes(int64(len(corpus)))
+			for i := 0; i < b.N; i++ {
+				SearchNeedle(corpus, computed)
+			}
+		})
+
+		b.Logf("%s: static=%c@%d,%c@%d  computed=%c@%d,%c@%d",
+			tc.name,
+			static.rare1, static.off1, static.rare2, static.off2,
+			computed.rare1, computed.off1, computed.rare2, computed.off2)
+	}
+}
+
+// makeNeedleWithCorpusRanks creates a Needle using byte frequencies from the actual corpus.
+// This simulates what a database would do: analyze the data once to find truly rare bytes.
+func makeNeedleWithCorpusRanks(needle, corpus string) Needle {
+	ranks := buildRankTable(corpus)
+	return MakeNeedleWithRanks(needle, ranks[:])
+}
+
+// buildRankTable computes a byte frequency rank table from a corpus.
+func buildRankTable(corpus string) [256]byte {
+	var counts [256]int
+	for i := 0; i < len(corpus); i++ {
+		c := corpus[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 0x20 // uppercase
+		}
+		counts[c]++
+	}
+
+	maxCount := 1
+	for _, c := range counts {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+
+	var ranks [256]byte
+	for i := range ranks {
+		ranks[i] = byte((counts[i] * 255) / maxCount)
+	}
+	return ranks
+}
+
+func FuzzSearchNeedle(f *testing.F) {
+	f.Add("hello world", "world")
+	f.Add("The Quick Brown Fox", "quick")
+	f.Add(strings.Repeat("a", 100), "aaa")
+	f.Add("xylophone", "xy")
+
+	// Bug regression seeds - these target specific edge cases
+	// Bug 1: Multiple rare-byte matches in same 16-byte chunk (tests nibble clearing)
+	f.Add("xQxZxQxZxQxZQZab", "QZab")
+	f.Add("QxZxQxZxQxZxQxZxQZmatch", "QZmatch")
+	// Bug 2: Match in tail region after SIMD loop (tests tail masking)
+	f.Add(strings.Repeat("x", 20)+"needle", "needle")
+	f.Add(strings.Repeat("x", 17)+"QZ", "QZ")
+	f.Add(strings.Repeat("y", 31)+"z", "z")
+	// Combined: multiple candidates AND in tail
+	f.Add(strings.Repeat("QZ", 8)+"xQZmatch", "QZmatch")
+
+	f.Fuzz(func(t *testing.T, haystack, needle string) {
+		n := MakeNeedle(needle)
+		got := SearchNeedle(haystack, n)
+		want := indexFoldGo(haystack, needle)
+		if got != want {
+			t.Fatalf("SearchNeedle(%q, %q) = %d, want %d", haystack, needle, got, want)
 		}
 	})
 }

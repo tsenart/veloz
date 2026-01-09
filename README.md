@@ -10,9 +10,13 @@ Another motivation for veloz is maintainability. Many Go packages rely on hand-r
 
 - High-speed ASCII string validation
 - Case-insensitive ASCII string comparison (`EqualFold`)
-- Case-insensitive ASCII substring search (`IndexFold`)
+- Case-insensitive ASCII substring search (`IndexFold`, `SearchNeedle`)
+- Precomputed needle search for repeated lookups (`MakeNeedle`, `SearchNeedle`)
+- Multi-character search (`IndexAny`, `ContainsAny`) - find any byte from a set
 - Fast UTF-8 validation
-- SIMD support for amd64 (AVX2, SSE4.1) and arm64 (NEON)
+- SIMD support for amd64 (AVX2, SSE4.1) and arm64 (NEON, SVE2)
+- NEON bitset (TBL2) acceleration for `IndexAny` with unlimited character sets
+- SVE2 MATCH acceleration on ARM servers (Graviton 4, Neoverse V2) for large character sets
 - Pure Go fallback for other architectures
 
 ## Installation
@@ -50,6 +54,23 @@ func main() {
     // Case-insensitive substring search
     fmt.Println(ascii.IndexFold("Hello, World!", "WORLD"))  // 7
     fmt.Println(ascii.IndexFold("Hello, World!", "foo"))    // -1
+
+    // Precomputed needle for repeated searches (1.7x faster for rare-byte needles)
+    needle := ascii.MakeNeedle("lazy")
+    fmt.Println(ascii.SearchNeedle("the quick brown fox jumps over the lazy dog", needle))  // 35
+
+    // Custom rank table for specialized corpora (DNA, hex dumps, etc.)
+    dnaRanks := make([]byte, 256)
+    for i := range dnaRanks { dnaRanks[i] = 255 }  // all rare by default
+    for _, c := range "ACGT" { dnaRanks[c] = 128 } // A,C,G,T equally common
+    dnaRanks['N'] = 64  // N is rarer
+    dnaRanks['X'] = 32  // X is very rare
+    dnaPattern := ascii.MakeNeedleWithRanks("GATTACA", dnaRanks)
+    _ = dnaPattern
+
+    // Find first occurrence of any character from a set
+    fmt.Println(ascii.IndexAny("hello world", " \t\n"))     // 5 (space)
+    fmt.Println(ascii.ContainsAny("hello", "aeiou"))        // true
 }
 ```
 
@@ -86,3 +107,116 @@ func main() {
 | ascii.EqualFold    | Apple M2   | 2,336        | 21,254       | 9.1x    |
 | ascii.IndexFold    | Apple M2   | 7,117        | 29,046       | 4.1x    |
 | utf8.ValidString   | Apple M2   | 1,673        | 10,014       | 6.0x    |
+
+### IndexAny Performance
+
+The `IndexAny` and `ContainsAny` functions use a NEON bitset approach (TBL2+TBL1 table lookups) that supports **unlimited character sets** with consistent performance. For large character sets (>32 chars) on SVE2-capable CPUs, SVE2 MATCH is used to avoid bitset building overhead.
+
+**Throughput by character set size (1KB data, Graviton 4):**
+
+| Chars | Go (GB/s) | NEON bitset (GB/s) | SVE2 MATCH (GB/s) | Speedup |
+|------:|----------:|-------------------:|------------------:|--------:|
+|     1 |       0.5 |                6.3 |               2.9 |   13.8x |
+|     8 |       0.5 |                6.3 |               2.9 |   13.9x |
+|    16 |       0.4 |                6.3 |               2.9 |   14.2x |
+|    32 |       0.4 |                6.3 |               2.9 |   14.7x |
+|    64 |       0.4 |                6.3 |               3.0 |   16.2x |
+
+**Throughput on Apple M3 Max (NEON only):**
+
+| Chars | Go (GB/s) | NEON bitset (GB/s) | Speedup |
+|------:|----------:|-------------------:|--------:|
+|     1 |       2.4 |               25.5 |   10.8x |
+|    16 |       2.2 |               25.9 |   11.6x |
+|    64 |       1.9 |               25.8 |   13.8x |
+
+*The NEON bitset uses ARM's TBL2 instruction for 32-byte table lookups, which is heavily optimized for cryptographic operations. This approach outperforms both the traditional compare-chain method and SVE2 MATCH for small-to-medium character sets.*
+
+### SearchNeedle Performance
+
+For repeated case-insensitive searches with the same needle, `SearchNeedle` with a precomputed `Needle` is faster than `IndexFold`. It combines techniques from [memchr](https://github.com/BurntSushi/memchr) (rare-byte selection) and [Sneller](https://github.com/SnellerInc/sneller) (compare+XOR normalization, tail masking):
+
+- **Rare-byte selection**: Picks the two rarest bytes in the needle (using English frequency table) to minimize false positives
+- **Compare+XOR normalization**: ~4 NEON instructions instead of table lookups for case folding
+- **Tail masking**: No scalar remainder loop - handles tail with SIMD masks
+- **SVE2 acceleration**: On Graviton 4/Neoverse V2, uses `svmatch` for 2-cycle rare-byte matching
+
+**Throughput (Graviton 4 with SVE2):**
+
+| Function     | Needle Type | Throughput (GB/s) | vs IndexFold |
+|--------------|-------------|------------------:|-------------:|
+| IndexFold    | common      |               2.2 |          1.0x |
+| SearchNeedle | common      |               5.3 |          2.4x |
+| IndexFold    | rare bytes  |               2.2 |          1.0x |
+| SearchNeedle | rare bytes  |               5.5 |          2.5x |
+
+**Throughput (Apple M3 Max, NEON only):**
+
+| Function     | Needle Type | Throughput (GB/s) | vs IndexFold |
+|--------------|-------------|------------------:|-------------:|
+| IndexFold    | common      |              11.2 |          1.0x |
+| SearchNeedle | common      |              22.8 |          2.0x |
+| IndexFold    | rare bytes  |              11.1 |          1.0x |
+| SearchNeedle | rare bytes  |              19.0 |          1.7x |
+
+*SearchNeedle uses SVE2's `svmatch` instruction when available, which matches up to 16 tokens in 2 cycles on Neoverse-N2/V2. Falls back to NEON on older ARM CPUs and Apple Silicon.*
+
+#### Needle Reuse Across Many Haystacks
+
+When searching for the same needle across many strings (e.g., log search, database queries), `MakeNeedle` cost is fully amortized:
+
+| Benchmark | 1K haystacks | 1M haystacks |
+|-----------|-------------:|-------------:|
+| IndexFold | 6.1 GB/s | 6.6 GB/s |
+| SearchNeedle (reused) | 7.5 GB/s | 8.1 GB/s |
+| **Speedup** | **1.22x** | **1.23x** |
+
+#### When Do Custom Rank Tables Help?
+
+The default `byteRank` table uses English letter frequency. For **JSON logs and traces**, this can be suboptimal:
+
+| Byte | Static Rank | JSON Logs | UUID-Heavy Traces |
+|------|-------------|-----------|-------------------|
+| `"` (double-quote) | 60 (rare) | **#1** (15%) | **#2** (9.5%) |
+| `:` (colon) | 70 (rare) | **#2** (5%) | #13 (2.4%) |
+| `0` (zero) | 130 (common) | #4 (4.6%) | **#1** (22%) |
+| `{` `}` | 20 (very rare) | #17-18 | #21+ |
+
+**Benchmark: JSON logs** (72KB corpus):
+
+| Needle | Static | Computed | Speedup |
+|--------|-------:|---------:|--------:|
+| `"status":200` | 6.4 GB/s | 7.7 GB/s | **1.20x** |
+| `"user_id":` | 5.3 GB/s | 5.8 GB/s | **1.09x** |
+
+**Benchmark: UUID-heavy traces** (168KB corpus):
+
+| Needle | Static | Computed | Speedup | Why |
+|--------|-------:|---------:|--------:|-----|
+| `"parent_id":"0003c` | 19.6 GB/s | 20.9 GB/s | **1.07x** | Static picks `"` (9.5% of corpus), computed picks `N` (1.2%) |
+| `"span_id":"0002da12` | 15.3 GB/s | 16.1 GB/s | **1.05x** | 16x fewer false positives with `S` vs `"` |
+
+**Key insight**: When the static table picks `"` as "rare", it checks 16x more candidate positions than necessary. The SIMD verification is fast, so the speedup is 5-20% rather than 16x - but it adds up.
+
+**Recommendation for logs/traces databases**:
+- Compute byte frequencies once per table/partition (256 bytes of metadata)
+- Use `MakeNeedleWithRanks` for 5-20% speedup on JSON key/UUID searches
+- Biggest wins: needles containing `"`, `:`, or `0` in JSON/trace data
+
+```go
+// Build rank table from corpus (do once, store with data)
+var counts [256]int
+for i := 0; i < len(corpus); i++ {
+    c := corpus[i]
+    if c >= 'a' && c <= 'z' { c -= 0x20 }  // case-fold
+    counts[c]++
+}
+maxCount := slices.Max(counts[:])
+ranks := make([]byte, 256)
+for i, c := range counts {
+    ranks[i] = byte(c * 255 / maxCount)
+}
+
+// Use for searches
+needle := ascii.MakeNeedleWithRanks(`"trace_id":"abc123`, ranks)
+```

@@ -2,6 +2,293 @@ package ascii
 
 import "math/bits"
 
+// byteRank is a frequency table for bytes based on corpus analysis.
+// Lower rank = rarer byte = better candidate for rare-byte search.
+// Derived from memchr's BYTE_FREQUENCIES table (corpus: CIA World Factbook,
+// rustc source, Septuaginta). UTF-8 prefix bytes (0xC0-0xFF) forced to 255
+// since continuation bytes are more discriminating.
+var byteRank = [256]byte{
+	// 0x00-0x0F: control characters (mostly rare)
+	55, 52, 51, 50, 49, 48, 47, 46, 45, 103, 242, 66, 67, 229, 44, 43,
+	// 0x10-0x1F: more control characters
+	42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 56, 32, 31, 30, 29, 28,
+	// 0x20-0x2F: space and punctuation
+	255, // ' ' - most common
+	148, // '!'
+	164, // '"' - common in JSON
+	149, // '#'
+	136, // '$'
+	160, // '%'
+	155, // '&'
+	173, // '\''
+	221, // '('
+	222, // ')'
+	134, // '*'
+	122, // '+'
+	232, // ',' - common
+	202, // '-'
+	215, // '.'
+	224, // '/'
+	// 0x30-0x39: digits
+	208, // '0'
+	220, // '1'
+	204, // '2'
+	187, // '3'
+	183, // '4'
+	179, // '5'
+	177, // '6'
+	168, // '7'
+	178, // '8'
+	200, // '9'
+	// 0x3A-0x40: more punctuation
+	226, // ':' - common in JSON
+	195, // ';'
+	154, // '<'
+	184, // '='
+	174, // '>'
+	126, // '?'
+	120, // '@'
+	// 0x41-0x5A: uppercase A-Z
+	191, // 'A'
+	157, // 'B'
+	194, // 'C'
+	170, // 'D'
+	189, // 'E'
+	162, // 'F'
+	161, // 'G'
+	150, // 'H'
+	193, // 'I'
+	142, // 'J'
+	137, // 'K'
+	171, // 'L'
+	176, // 'M'
+	185, // 'N'
+	167, // 'O'
+	186, // 'P'
+	112, // 'Q' - rare
+	175, // 'R'
+	192, // 'S'
+	188, // 'T'
+	156, // 'U'
+	140, // 'V'
+	143, // 'W'
+	123, // 'X' - rare
+	133, // 'Y'
+	128, // 'Z' - rare
+	// 0x5B-0x60: brackets and punctuation
+	147, // '['
+	138, // '\\'
+	146, // ']'
+	114, // '^'
+	223, // '_'
+	151, // '`'
+	// 0x61-0x7A: lowercase a-z
+	249, // 'a'
+	216, // 'b'
+	238, // 'c'
+	236, // 'd'
+	253, // 'e' - most common letter
+	227, // 'f'
+	218, // 'g'
+	230, // 'h'
+	247, // 'i'
+	135, // 'j' - rare
+	180, // 'k'
+	241, // 'l'
+	233, // 'm'
+	246, // 'n'
+	244, // 'o'
+	231, // 'p'
+	139, // 'q' - rare
+	245, // 'r'
+	243, // 's'
+	251, // 't'
+	235, // 'u'
+	201, // 'v'
+	196, // 'w'
+	240, // 'x'
+	214, // 'y'
+	152, // 'z' - rare
+	// 0x7B-0x7F: braces and control
+	182, // '{'
+	205, // '|'
+	181, // '}'
+	127, // '~'
+	27,  // DEL
+	// 0x80-0xBF: UTF-8 continuation bytes (varied frequency in real UTF-8 text)
+	212, 211, 210, 213, 228, 197, 169, 159, 131, 172, 105, 80, 98, 96, 97, 81,
+	207, 145, 116, 115, 144, 130, 153, 121, 107, 132, 109, 110, 124, 111, 82, 108,
+	118, 141, 113, 129, 119, 125, 165, 117, 92, 106, 83, 72, 99, 93, 65, 79,
+	166, 237, 163, 199, 190, 225, 209, 203, 198, 217, 219, 206, 234, 248, 158, 239,
+	// 0xC0-0xFF: UTF-8 prefix bytes (force to 255 = most common, per memchr)
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+}
+
+// toUpper converts ASCII lowercase to uppercase.
+func toUpper(b byte) byte {
+	if b >= 'a' && b <= 'z' {
+		return b - 0x20
+	}
+	return b
+}
+
+// normalizeASCII converts a string to uppercase ASCII.
+func normalizeASCII(s string) string {
+	b := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		b[i] = toUpper(s[i])
+	}
+	return string(b)
+}
+
+// selectRarePair finds the two rarest bytes in the needle and their offsets.
+// Returns (rare1, off1, rare2, off2) where rare1 is at off1, rare2 is at off2.
+// Prefers larger distance between the two bytes when ranks are similar.
+// If ranks is nil, uses the default byteRank table.
+func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 byte, off2 int) {
+	if len(needle) == 0 {
+		return 0, 0, 0, 0
+	}
+	if len(needle) == 1 {
+		return toUpper(needle[0]), 0, toUpper(needle[0]), 0
+	}
+
+	if ranks == nil {
+		ranks = byteRank[:]
+	}
+
+	// Find the two rarest bytes (using normalized/uppercase form for ranking)
+	type candidate struct {
+		norm byte // normalized (uppercase) byte
+		off  int  // offset in needle
+		rank byte // frequency rank
+	}
+
+	// Initialize with first two bytes
+	c0 := candidate{toUpper(needle[0]), 0, ranks[toUpper(needle[0])]}
+	c1 := candidate{toUpper(needle[1]), 1, ranks[toUpper(needle[1])]}
+
+	// Keep c0 as the rarer one
+	if c1.rank < c0.rank {
+		c0, c1 = c1, c0
+	}
+
+	// Scan rest of needle for rarer bytes
+	for i := 2; i < len(needle); i++ {
+		norm := toUpper(needle[i])
+		rank := ranks[norm]
+		if rank < c0.rank {
+			// New rarest - shift c0 to c1
+			c1 = c0
+			c0 = candidate{norm, i, rank}
+		} else if rank < c1.rank {
+			// New second-rarest
+			c1 = candidate{norm, i, rank}
+		} else if rank == c1.rank && abs(i-c0.off) > abs(c1.off-c0.off) {
+			// Same rank but larger distance - prefer it
+			c1 = candidate{norm, i, rank}
+		}
+	}
+
+	// Force different bytes: if both rare bytes are the same, find ANY different byte.
+	// This avoids high false-positive rates when a single byte dominates (e.g., '"' in JSON).
+	// Even a "common" different byte is better than two identical "rare" bytes.
+	if c0.norm == c1.norm {
+		for i := 0; i < len(needle); i++ {
+			norm := toUpper(needle[i])
+			if norm != c0.norm {
+				// Found a different byte - use it as c1, preferring max distance from c0
+				if c1.norm == c0.norm || abs(i-c0.off) > abs(c1.off-c0.off) {
+					c1 = candidate{norm, i, ranks[norm]}
+				}
+			}
+		}
+	}
+
+	// Return with off1 < off2 for consistent ordering
+	if c0.off < c1.off {
+		return c0.norm, c0.off, c1.norm, c1.off
+	}
+	return c1.norm, c1.off, c0.norm, c0.off
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// Needle represents a precomputed needle for fast case-insensitive search.
+// Build once with MakeNeedle, reuse with SearchNeedle.
+type Needle struct {
+	raw   string // original needle
+	norm  string // uppercase needle (for verification)
+	rare1 byte   // first rare byte (normalized)
+	off1  int    // offset in needle
+	rare2 byte   // second rare byte (normalized)
+	off2  int    // offset in needle
+}
+
+// ByteRank exposes the default frequency table for ASCII bytes (read-only).
+// Lower rank = rarer byte = better candidate for rare-byte search.
+// This table is not consulted by MakeNeedle; to customize rare-byte selection,
+// copy this table, modify it, and pass to MakeNeedleWithRanks.
+var ByteRank = byteRank
+
+// MakeNeedle precomputes a needle for repeated case-insensitive searches.
+// Uses the default English frequency table for rare-byte selection.
+func MakeNeedle(needle string) Needle {
+	rare1, off1, rare2, off2 := selectRarePair(needle, nil)
+	return Needle{
+		raw:   needle,
+		norm:  normalizeASCII(needle),
+		rare1: rare1,
+		off1:  off1,
+		rare2: rare2,
+		off2:  off2,
+	}
+}
+
+// MakeNeedleWithRanks precomputes a needle using a custom byte frequency table.
+// The ranks slice must have 256 entries where lower values indicate rarer bytes.
+//
+// Use this for specialized corpora where byte frequencies differ from English:
+//   - DNA sequences (A, C, G, T equally common)
+//   - Hex dumps (0-9, A-F equally common)
+//   - Domain-specific logs with unusual patterns
+//
+// To build a rank table from a corpus:
+//
+//	var counts [256]int
+//	for i := 0; i < len(corpus); i++ {
+//	    c := corpus[i]
+//	    if c >= 'a' && c <= 'z' { c -= 0x20 }  // uppercase
+//	    counts[c]++
+//	}
+//	maxCount := slices.Max(counts[:])
+//	ranks := make([]byte, 256)
+//	for i, c := range counts {
+//	    ranks[i] = byte(c * 255 / maxCount)
+//	}
+func MakeNeedleWithRanks(needle string, ranks []byte) Needle {
+	if len(ranks) != 256 {
+		panic("ranks must have exactly 256 entries")
+	}
+	rare1, off1, rare2, off2 := selectRarePair(needle, ranks)
+	return Needle{
+		raw:   needle,
+		norm:  normalizeASCII(needle),
+		rare1: rare1,
+		off1:  off1,
+		rare2: rare2,
+		off2:  off2,
+	}
+}
+
 func indexMaskGo[T string | []byte](s T, mask byte) int {
 	mask32 := uint32(mask)
 	mask32 |= mask32 << 8
@@ -147,6 +434,26 @@ func indexFoldGo[T string | []byte](s T, substr T) int {
 			if equalFoldGo(string(prefix[:len(substr)]), string(substr)) {
 				return i
 			}
+		}
+	}
+	return -1
+}
+
+func indexAnyGo(s, chars string) int {
+	if len(chars) == 0 {
+		return -1
+	}
+	// Build 256-bit set (8 uint32s) for O(1) lookup per byte
+	var set [8]uint32
+	for i := 0; i < len(chars); i++ {
+		c := chars[i]
+		set[c>>5] |= 1 << (c & 31)
+	}
+	// O(n) scan
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if set[c>>5]&(1<<(c&31)) != 0 {
+			return i
 		}
 	}
 	return -1

@@ -5,6 +5,9 @@ package ascii
 
 
 //go:noescape
+func indexAnyNeonBitset(data string, bitset0 uint64, bitset1 uint64, bitset2 uint64, bitset3 uint64) int
+
+//go:noescape
 func ValidString(data string) bool
 
 //go:noescape
@@ -18,3 +21,6 @@ func indexFoldRabinKarp(a string, b string) int
 
 //go:noescape
 func IndexFold(a string, b string) int
+
+//go:noescape
+func IndexFoldNeedle(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, normNeedle string) int

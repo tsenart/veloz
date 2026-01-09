@@ -2,6 +2,86 @@
 #include <stdbool.h>
 #include <arm_neon.h>
 
+// IndexAny using 256-bit bitset approach.
+// Supports unlimited search chars with consistent O(n) performance.
+// The bitset is passed pre-built from Go to avoid stack arrays in C.
+//
+// gocc: indexAnyNeonBitset(data string, bitset0 uint64, bitset1 uint64, bitset2 uint64, bitset3 uint64) int
+int64_t index_any_neon_bitset(unsigned char *data, uint64_t data_len, 
+    uint64_t bitset0, uint64_t bitset1, uint64_t bitset2, uint64_t bitset3)
+{
+    if (data_len == 0) {
+        return -1;
+    }
+
+    const uint64_t blockSize = 16;
+    const unsigned char *data_start = data;
+    
+    // Build 256-bit bitset from 4 uint64s - fits in 2 NEON registers for TBL2
+    uint8x16x2_t bitset;
+    bitset.val[0] = vcombine_u8(vcreate_u8(bitset0), vcreate_u8(bitset1));
+    bitset.val[1] = vcombine_u8(vcreate_u8(bitset2), vcreate_u8(bitset3));
+    
+    // Mask to extract bit position (0-7) and index (0-31)
+    const uint8x16_t mask7 = vdupq_n_u8(7);
+    const uint8x16_t mask31 = vdupq_n_u8(31);
+    
+    // Bit position lookup table: 1<<0, 1<<1, ..., 1<<7 (repeated for 16 bytes)
+    // In little-endian: byte 0 = 0x01, byte 1 = 0x02, ..., byte 7 = 0x80
+    const uint8x16_t bit_lut = vcombine_u8(
+        vcreate_u8(0x8040201008040201ULL),
+        vcreate_u8(0x8040201008040201ULL)
+    );
+    
+    // Process 16 bytes at a time
+    for (const unsigned char *data_end = (data + data_len) - (data_len % blockSize); data < data_end; data += blockSize)
+    {
+        uint8x16_t d = vld1q_u8(data);
+        
+        // idx = d >> 3 (which byte in 32-byte bitset, masked to 0-31)
+        uint8x16_t idx = vandq_u8(vshrq_n_u8(d, 3), mask31);
+        
+        // bit_pos = d & 7 (which bit within that byte)
+        uint8x16_t bit_pos = vandq_u8(d, mask7);
+        
+        // Look up the bitset byte for each lane
+        uint8x16_t bitset_bytes = vqtbl2q_u8(bitset, idx);
+        
+        // Look up the bit mask for each lane (bit_lut[bit_pos] = 1 << bit_pos)
+        uint8x16_t bit_masks = vqtbl1q_u8(bit_lut, bit_pos);
+        
+        // Check if the bit is set: (bitset_bytes & bit_masks) != 0
+        uint8x16_t match = vtstq_u8(bitset_bytes, bit_masks);
+        
+        // Check if any match found
+        uint64_t match64 = vget_lane_u64(vshrn_n_u16(match, 4), 0);
+        if (match64) {
+            int pos = __builtin_ctzll(match64) / 4;
+            return (data - data_start) + pos;
+        }
+    }
+    data_len %= blockSize;
+    
+    // Handle remainder with scalar bitset lookup
+    for (uint64_t i = 0; i < data_len; i++) {
+        unsigned char c = data[i];
+        uint64_t word;
+        switch (c >> 6) {
+            case 0: word = bitset0; break;
+            case 1: word = bitset1; break;
+            case 2: word = bitset2; break;
+            default: word = bitset3; break;
+        }
+        if (word & (1ULL << (c & 63))) {
+            return (data - data_start) + i;
+        }
+    }
+    
+    return -1;
+}
+
+
+
 // gocc: ValidString(data string) bool
 bool ascii_valid_string(unsigned char *data, uint64_t length)
 {
@@ -774,3 +854,195 @@ int64_t index_fold(unsigned char *haystack, int64_t haystack_len, unsigned char 
 
     return -1;
 }
+
+// =============================================================================
+// IndexFoldNeedle - Optimized case-insensitive search with precomputed needle
+// =============================================================================
+// Combines:
+// - memchr's rare byte selection (variable offsets)
+// - Sneller's compare+XOR normalization (no table lookup)
+// - Sneller's tail masking (no scalar remainder loop)
+
+// Tail masks for handling remainder bytes without scalar loops (Sneller-style)
+static const uint8_t tail_mask_table[16][16] __attribute__((aligned(16))) = {
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 0
+    {0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 1
+    {0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 2
+    {0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 3
+    {0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 4
+    {0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 5
+    {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 6
+    {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 7
+    {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 8
+    {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 9
+    {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00}, // 10
+    {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00}, // 11
+    {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00}, // 12
+    {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00}, // 13
+    {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00}, // 14
+    {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00}, // 15
+};
+
+// Sneller-style compare+XOR normalization: no table lookup, ~4 instructions
+static inline uint8x16_t normalize_upper(uint8x16_t v) {
+    const uint8x16_t char_a = vdupq_n_u8('a');
+    const uint8x16_t char_z = vdupq_n_u8('z');
+    const uint8x16_t flip = vdupq_n_u8(0x20);
+    
+    // is_lower = (v >= 'a') & (v <= 'z')
+    uint8x16_t ge_a = vcgeq_u8(v, char_a);
+    uint8x16_t le_z = vcleq_u8(v, char_z);
+    uint8x16_t is_lower = vandq_u8(ge_a, le_z);
+    
+    // XOR with 0x20 where lowercase to convert to uppercase
+    return veorq_u8(v, vandq_u8(is_lower, flip));
+}
+
+// Compare haystack against pre-normalized needle, return true if equal
+// IMPORTANT: 'b' (norm_needle) is already uppercase, so we only normalize 'a' (haystack)
+static inline bool equal_fold_normalized(const unsigned char *a, const unsigned char *b, int64_t len) {
+    while (len >= 16) {
+        uint8x16_t va = normalize_upper(vld1q_u8(a));
+        uint8x16_t vb = vld1q_u8(b);  // b is already normalized - don't waste ops!
+        uint8x16_t diff = veorq_u8(va, vb);
+        if (vmaxvq_u8(diff)) return false;
+        a += 16;
+        b += 16;
+        len -= 16;
+    }
+    if (len > 0) {
+        uint8x16_t mask = vld1q_u8(tail_mask_table[len]);
+        uint8x16_t va = vandq_u8(normalize_upper(vld1q_u8(a)), mask);
+        uint8x16_t vb = vandq_u8(vld1q_u8(b), mask);  // b is already normalized
+        uint8x16_t diff = veorq_u8(va, vb);
+        if (vmaxvq_u8(diff)) return false;
+    }
+    return true;
+}
+
+// gocc: IndexFoldNeedle(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, normNeedle string) int
+int64_t index_fold_needle(
+    unsigned char *haystack, int64_t haystack_len,
+    uint8_t rare1, int64_t off1,
+    uint8_t rare2, int64_t off2,
+    unsigned char *norm_needle, int64_t needle_len)
+{
+    if (haystack_len < needle_len) return -1;
+    if (needle_len <= 0) return 0;
+    
+    const int64_t search_len = haystack_len - needle_len + 1;
+    
+    // Optimization A: Branchless case-folding for rare-byte compare
+    // Use AND with mask to fold case: 0xDF for letters (clears bit 5), 0xFF for non-letters (no-op).
+    // This reduces ops from 3 (ceq+ceq+or) to 2 (and+ceq) and is branchless.
+    // Benchmarks: +22% on Graviton 4 large haystacks, ~same on Apple Silicon.
+    const bool rare1_is_letter = ((rare1 | 0x20) >= 'a' && (rare1 | 0x20) <= 'z');
+    const uint8_t rare1U = rare1_is_letter ? (rare1 & ~0x20u) : rare1;
+    const uint8_t mask1 = rare1_is_letter ? 0xDF : 0xFF;
+    
+    const bool rare2_is_letter = ((rare2 | 0x20) >= 'a' && (rare2 | 0x20) <= 'z');
+    const uint8_t rare2U = rare2_is_letter ? (rare2 & ~0x20u) : rare2;
+    const uint8_t mask2 = rare2_is_letter ? 0xDF : 0xFF;
+    
+    const uint8x16_t v_rare1U = vdupq_n_u8(rare1U);
+    const uint8x16_t v_rare2U = vdupq_n_u8(rare2U);
+    const uint8x16_t v_mask1 = vdupq_n_u8(mask1);
+    const uint8x16_t v_mask2 = vdupq_n_u8(mask2);
+    
+    int64_t i = 0;
+    
+    // Optimization B: 64-byte four-load loop (memchr-style)
+    // Process 64 bytes per iteration to reduce branch overhead and improve ILP
+    for (; i + 64 <= search_len; i += 64) {
+        uint8x16x4_t c1 = vld1q_u8_x4(haystack + i + off1);
+        uint8x16x4_t c2 = vld1q_u8_x4(haystack + i + off2);
+        
+        uint64_t mask[4];
+        
+        // Unrolled: process each 16-byte lane with branchless case-folding
+        #pragma unroll
+        for (int k = 0; k < 4; k++) {
+            // Branchless: AND with mask (0xDF folds case, 0xFF is no-op), then compare
+            uint8x16_t eq1 = vceqq_u8(vandq_u8(c1.val[k], v_mask1), v_rare1U);
+            uint8x16_t eq2 = vceqq_u8(vandq_u8(c2.val[k], v_mask2), v_rare2U);
+            
+            uint8x16_t both = vandq_u8(eq1, eq2);
+            mask[k] = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both), 4)), 0);
+        }
+        
+        // Early exit: check if any of the 4 masks have matches
+        uint64_t any = mask[0] | mask[1] | mask[2] | mask[3];
+        if (!any) continue;
+        
+        // Find earliest match across the 4 chunks
+        for (int k = 0; k < 4; k++) {
+            uint64_t m = mask[k];
+            while (m) {
+                int pos = __builtin_ctzll(m) / 4;
+                m &= ~(0xFULL << (pos * 4));
+                
+                int64_t idx = i + 16 * k + pos;
+                if (equal_fold_normalized(haystack + idx, norm_needle, needle_len)) {
+                    return idx;
+                }
+            }
+        }
+    }
+    
+    // 16-byte loop for remainder (same branchless case-folding)
+    for (; i + 16 <= search_len; i += 16) {
+        uint8x16_t c1 = vld1q_u8(haystack + i + off1);
+        uint8x16_t c2 = vld1q_u8(haystack + i + off2);
+        
+        uint8x16_t eq1 = vceqq_u8(vandq_u8(c1, v_mask1), v_rare1U);
+        uint8x16_t eq2 = vceqq_u8(vandq_u8(c2, v_mask2), v_rare2U);
+        
+        uint8x16_t both = vandq_u8(eq1, eq2);
+        
+        uint64_t match64 = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both), 4)), 0);
+        if (!match64) continue;
+        
+        while (match64) {
+            int pos = __builtin_ctzll(match64) / 4;
+            match64 &= ~(0xFULL << (pos * 4));
+            
+            if (equal_fold_normalized(haystack + i + pos, norm_needle, needle_len)) {
+                return i + pos;
+            }
+        }
+    }
+    
+    // Handle remainder with tail masking (Sneller-style)
+    // Key insight: DON'T mask chunks before comparison (masking to 0 would only match if rare byte is 0)
+    // Instead, mask the final result to ignore positions beyond search_len
+    if (i < search_len) {
+        int64_t remaining = search_len - i;
+        uint8x16_t tail_mask = vld1q_u8(tail_mask_table[remaining > 15 ? 15 : remaining]);
+        
+        // Use same branchless case-folding as main loop
+        uint8x16_t c1 = vld1q_u8(haystack + i + off1);
+        uint8x16_t c2 = vld1q_u8(haystack + i + off2);
+        
+        uint8x16_t eq1 = vceqq_u8(vandq_u8(c1, v_mask1), v_rare1U);
+        uint8x16_t eq2 = vceqq_u8(vandq_u8(c2, v_mask2), v_rare2U);
+        
+        uint8x16_t both = vandq_u8(eq1, eq2);
+        
+        // Mask out positions beyond search_len AFTER comparison
+        both = vandq_u8(both, tail_mask);
+        
+        uint64_t match64 = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both), 4)), 0);
+        
+        while (match64) {
+            int pos = __builtin_ctzll(match64) / 4;
+            match64 &= ~(0xFULL << (pos * 4));
+            
+            if (i + pos < search_len && equal_fold_normalized(haystack + i + pos, norm_needle, needle_len)) {
+                return i + pos;
+            }
+        }
+    }
+    
+    return -1;
+}
+
