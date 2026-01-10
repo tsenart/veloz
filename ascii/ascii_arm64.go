@@ -95,5 +95,11 @@ func SearchNeedle(haystack string, n Needle) int {
 	if hasSVE2 && (n.rare1 != n.rare2 || len(n.raw) >= 8) {
 		return indexFoldNeedleSve2(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
 	}
+	// Frequency-based algorithm selection:
+	// - If rare1 is truly rare (frequency < threshold): use adaptive 1-byte fast path
+	// - Otherwise: use 2-byte NEON directly (avoids cutover overhead)
+	if isRareByte(n.rare1) {
+		return indexFoldNeedleAdaptive(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+	}
 	return IndexFoldNeedle(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
 }

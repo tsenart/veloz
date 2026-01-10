@@ -860,12 +860,7 @@ func TestSearchNeedle(t *testing.T) {
 	}
 }
 
-func TestNeon64B(t *testing.T) {
-	// Debug print for needle
-	n := MakeNeedle("needle")
-	t.Logf("needle: rare1=%c off1=%d rare2=%c off2=%d norm=%q",
-		n.rare1, n.off1, n.rare2, n.off2, n.norm)
-
+func TestNeon128B(t *testing.T) {
 	tests := []struct {
 		haystack, needle string
 		want             int
@@ -880,37 +875,24 @@ func TestNeon64B(t *testing.T) {
 		{"hello world", "WORLD", 6},
 		{"Hello World", "hello", 0},
 		{"The Quick Brown Fox", "quick", 4},
-		// Longer strings to exercise 64-byte loop
+		// Longer strings to exercise 128-byte loop
 		{strings.Repeat("a", 100) + "NEEDLE" + strings.Repeat("b", 100), "needle", 100},
 		{strings.Repeat("x", 1000) + "QuIcK", "quick", 1000},
-		// Very long strings for 64-byte loop
+		// Very long strings
 		{strings.Repeat("abcdefghijklmnopqrstuvw ", 10000) + "XYLOPHONE", "xylophone", 240000},
 		// Edge cases for loop boundaries
-		{strings.Repeat("x", 63) + "needle", "needle", 63},
-		{strings.Repeat("x", 64) + "needle", "needle", 64},
-		{strings.Repeat("x", 65) + "needle", "needle", 65},
 		{strings.Repeat("x", 127) + "needle", "needle", 127},
 		{strings.Repeat("x", 128) + "needle", "needle", 128},
+		{strings.Repeat("x", 129) + "needle", "needle", 129},
 	}
 
 	for _, tt := range tests {
 		n := MakeNeedle(tt.needle)
-		
-		// Test NEON-Golike
-		got := indexFoldNeedleNeonGolike(tt.haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+		got := indexFoldNeedleNeon128(tt.haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
 		if got != tt.want {
-			t.Errorf("indexFoldNeedleNeonGolike(%q..., %q) = %d, want %d",
+			t.Errorf("indexFoldNeedleNeon128(%q..., %q) = %d, want %d",
 				truncate(tt.haystack, 30), tt.needle, got, tt.want)
 		}
-		
-		// Test NEON-64B
-		got = indexFoldNeedleNeon64(tt.haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
-		if got != tt.want {
-			t.Errorf("indexFoldNeedleNeon64(%q..., %q) = %d, want %d",
-				truncate(tt.haystack, 30), tt.needle, got, tt.want)
-		}
-		
-		// NEON-Tight has bugs - skip for now
 	}
 }
 
