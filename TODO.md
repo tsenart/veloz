@@ -189,7 +189,86 @@ loop_2byte:
 
 ---
 
-## Phase 4: Integration and Optimization
+## Phase 4: SVE2 Optimization (Equal Priority with NEON)
+
+### Critical Discovery: Vector Width Parity
+| Processor | NEON | SVE/SVE2 |
+|-----------|------|----------|
+| Graviton 3 (Neoverse V1) | 128-bit | **256-bit SVE** (no SVE2) |
+| Graviton 4 (Neoverse V2) | 128-bit | **128-bit SVE2** |
+
+**Key insight**: On Graviton 4, SVE2 and NEON have IDENTICAL vector width.
+Current SVE2 slowdown (16.5 vs 36.5 GB/s) is purely from suboptimal compiler-generated code, NOT inherent ISA limitations.
+
+With equal optimization effort, SVE2 should match NEON. MATCH instruction could provide an edge:
+- NEON case-insensitive: `VAND mask` + `VCMEQ` (2 ops)
+- SVE2 case-insensitive: `MATCH` against both cases (1 op, potentially faster)
+
+### 4.1 Analyze Current SVE2 Bottlenecks
+- [ ] Profile with hardware counters (cycles, instructions, front-end stalls)
+- [ ] Identify: predicate overhead, MATCH latency, unrolling gaps
+- [ ] Compare instruction count per byte: SVE2 vs NEON
+- [ ] Verify MATCH throughput on Graviton 4 (is it 1/cycle?)
+
+### 4.2 Hand-Optimize SVE2 Loop Structure
+Current problems (compiler-generated):
+- `whilelo` every iteration (overhead)
+- Predicated `ld1b` for all loads (unnecessary in steady state)
+- No unrolling (poor ILP)
+- Heavy predicate dependency chains
+
+Optimization plan (mirror NEON-128B approach):
+- [ ] **Prologue**: Handle alignment and short strings (<VL bytes)
+- [ ] **Steady-state loop**:
+  - Use `ptrue p0.b` (full predicate, no `whilelo`)
+  - Unpredicated `ld1b` loads (faster than predicated)
+  - 2-4x unroll: multiple MATCH ops in flight
+  - Overlap load latency with previous iteration's compare
+- [ ] **Tail**: Single `whilelo` for final partial chunk only
+
+### 4.3 Leverage MATCH for Case-Insensitive Search
+MATCH instruction advantage:
+```
+; NEON approach (2 ops per byte-check):
+VAND  V0.B16, Vdata.B16, Vmask.B16   ; case fold
+VCMEQ Vtarget.B16, V0.B16, Vresult.B16
+
+; SVE2 approach (1 op per byte-check):
+MATCH p1.b, p0/z, Zdata.b, Ztargets.b  ; Ztargets = ['a', 'A', ...]
+```
+
+- [ ] Benchmark MATCH vs VAND+VCMEQ throughput
+- [ ] For 2-byte search: MATCH both rare1 and rare2 cases in single vector
+- [ ] Explore: ZIP to interleave upper/lower case targets
+
+### 4.4 SVE2 Register Allocation
+- [ ] Use more Z registers to enable deeper unrolling (Z0-Z31 available)
+- [ ] Avoid predicate dependencies between iterations
+- [ ] Hoist invariant setup (case targets) outside loop
+- [ ] Compare register pressure: SVE2 vs NEON
+
+### 4.5 Benchmark Head-to-Head
+Run identical workloads on Graviton 4:
+- [ ] Pure scan 1MB: target ≥35 GB/s
+- [ ] High false-positive (JSON): target ≥15 GB/s
+- [ ] Compare cycle counts, not just throughput
+- [ ] Measure: which is actually faster with equal optimization?
+
+### 4.6 Decision Point
+After hand-optimization of both:
+- [ ] **SVE2 > NEON**: Use SVE2 as primary on Graviton 4
+- [ ] **SVE2 ≈ NEON**: Use SVE2 (simpler codepath, MATCH elegance)
+- [ ] **SVE2 < NEON**: Use NEON, investigate why MATCH didn't help
+
+### 4.7 Graviton 3 Consideration (Optional)
+Graviton 3 has 256-bit SVE (not SVE2), which is 2x NEON width.
+- [ ] Explore: Can 256-bit SVE on G3 beat 128-bit NEON?
+- [ ] Challenge: No MATCH instruction, must use CMPEQ
+- [ ] Potential: 2x throughput could outweigh MATCH advantage
+
+---
+
+## Phase 5: Integration and Optimization
 
 ### 4.1 Wire Up Dispatcher
 - [ ] Update `SearchNeedle` to use frequency heuristic + adaptive function
