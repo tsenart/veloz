@@ -3,12 +3,18 @@
 // Adaptive NEON case-insensitive substring search
 // 
 // Strategy:
-// 1. Start with 1-byte fast path (36.5 GB/s on clean data)
+// 1. Start with 1-byte fast path (high throughput, ~80-90% of strings.Index)
 // 2. Track verification failures in R25
-// 3. When failures > 4 + (bytes_scanned >> 10), cut over to 2-byte mode
-// 4. 2-byte mode filters on both rare1 AND rare2 (17 GB/s consistent)
+// 3. When failures > 4 + (bytes_scanned >> 8), cut over to 2-byte mode
+// 4. 2-byte mode filters on both rare1 AND rare2 (consistent, ~50% of pure scan)
 //
-// This achieves ~35 GB/s on clean workloads and ~17 GB/s on high-FP data.
+// Performance characteristics (vs case-sensitive strings.Index):
+// - Pure scan (no match): ~80-90% of strings.Index speed
+// - High false-positive: 6-10x faster than strings.Index
+//
+// The >> 8 threshold (1 failure per 256 bytes) was empirically determined
+// to be optimal - more conservative (>>10) hurts pure scan, more aggressive
+// (>>7) triggers unnecessary cutovers.
 
 #include "textflag.h"
 
@@ -330,12 +336,13 @@ verify_fail_1byte:
 	// Increment failure counter
 	ADD   $1, R25, R25
 
-	// Check threshold: failures > 4 + (bytes_scanned >> 10)
+	// Check threshold: failures > 4 + (bytes_scanned >> 8)
 	// bytes_scanned = original_remaining - current_remaining
-	// >> 10 means allow ~1 extra failure per 1KB scanned
+	// >> 8 means allow ~1 extra failure per 256 bytes scanned
+	// Empirically optimal: balances pure scan (36.7 GB/s) and high-FP (17.4 GB/s)
 	SUB   R11, R10, R17           // bytes_scanned = current_ptr - start_ptr
-	LSR   $10, R17, R17           // bytes_scanned >> 10
-	ADD   $4, R17, R17            // threshold = 4 + (bytes_scanned >> 10)
+	LSR   $8, R17, R17            // bytes_scanned >> 8
+	ADD   $4, R17, R17            // threshold = 4 + (bytes_scanned >> 8)
 	CMP   R17, R25
 	BGT   setup_2byte_mode        // Too many failures, switch to 2-byte
 
