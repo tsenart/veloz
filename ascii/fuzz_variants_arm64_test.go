@@ -98,5 +98,21 @@ func FuzzSearchNeedleAllVariants(f *testing.F) {
 				t.Fatalf("indexFoldNeedleSve2(%q, %q) = %d, want %d", haystack, needle, got, want)
 			}
 		}
+
+		// Test NEON-V2 (aligned loads variant)
+		if len(needle) > 0 && len(haystack) >= 16 {
+			got := indexFoldNeedleNeonV2(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+			if got != want {
+				t.Fatalf("indexFoldNeedleNeonV2(%q, %q) = %d, want %d", haystack, needle, got, want)
+			}
+		}
+
+		// Test NEON-128B (128-byte loop variant)
+		if len(needle) > 0 && len(haystack) >= 16 {
+			got := indexFoldNeedleNeon128(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+			if got != want {
+				t.Fatalf("indexFoldNeedleNeon128(%q, %q) = %d, want %d", haystack, needle, got, want)
+			}
+		}
 	})
 }

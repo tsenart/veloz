@@ -163,6 +163,94 @@ func BenchmarkSearchNeedleVariants(b *testing.B) {
 		{"large-1MB", largeHaystack, "xylophone"},
 	}
 
+	// Pure scan benchmark (no verification - needle not found)
+	pureScanHaystack := strings.Repeat("abcdefghijklmnoprstuvwy ", 1024*1024/24)
+	pureScanNeedle := MakeNeedle("quartz") // Q and Z never appear
+	
+	b.Run("pure-scan-1MB/NEON", func(b *testing.B) {
+		b.SetBytes(int64(len(pureScanHaystack)))
+		for i := 0; i < b.N; i++ {
+			benchSink = IndexFoldNeedle(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+		}
+	})
+	b.Run("pure-scan-1MB/NEON-Fast", func(b *testing.B) {
+		b.SetBytes(int64(len(pureScanHaystack)))
+		for i := 0; i < b.N; i++ {
+			benchSink = indexFoldNeedleNeonFast(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+		}
+	})
+	b.Run("pure-scan-1MB/NEON-Single", func(b *testing.B) {
+		b.SetBytes(int64(len(pureScanHaystack)))
+		for i := 0; i < b.N; i++ {
+			benchSink = indexFoldNeedleNeonSingle(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+		}
+	})
+	b.Run("pure-scan-1MB/NEON-Golike", func(b *testing.B) {
+		b.SetBytes(int64(len(pureScanHaystack)))
+		for i := 0; i < b.N; i++ {
+			benchSink = indexFoldNeedleNeonGolike(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+		}
+	})
+	b.Run("pure-scan-1MB/NEON-64B", func(b *testing.B) {
+		b.SetBytes(int64(len(pureScanHaystack)))
+		for i := 0; i < b.N; i++ {
+			benchSink = indexFoldNeedleNeon64(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+		}
+	})
+	b.Run("pure-scan-1MB/NEON-V2", func(b *testing.B) {
+		b.SetBytes(int64(len(pureScanHaystack)))
+		for i := 0; i < b.N; i++ {
+			benchSink = indexFoldNeedleNeonV2(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+		}
+	})
+	b.Run("pure-scan-1MB/NEON-128B", func(b *testing.B) {
+		b.SetBytes(int64(len(pureScanHaystack)))
+		for i := 0; i < b.N; i++ {
+			benchSink = indexFoldNeedleNeon128(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+		}
+	})
+	b.Run("pure-scan-1MB/NEON-Tight", func(b *testing.B) {
+		b.SetBytes(int64(len(pureScanHaystack)))
+		for i := 0; i < b.N; i++ {
+			benchSink = indexFoldNeedleNeonTight(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+		}
+	})
+	b.Run("pure-scan-1MB/IndexByte", func(b *testing.B) {
+		b.SetBytes(int64(len(pureScanHaystack)))
+		for i := 0; i < b.N; i++ {
+			benchSink = indexFoldNeedleIndexByte(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+		}
+	})
+	// NEON-Dual has a bounds bug - disabled for now
+	// b.Run("pure-scan-1MB/NEON-Dual", func(b *testing.B) {
+	// 	b.SetBytes(int64(len(pureScanHaystack)))
+	// 	for i := 0; i < b.N; i++ {
+	// 		benchSink = indexFoldNeedleNeonDual(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+	// 	}
+	// })
+	// Baseline: Go's strings.Index for comparison (case-sensitive)
+	b.Run("pure-scan-1MB/Go-Index", func(b *testing.B) {
+		b.SetBytes(int64(len(pureScanHaystack)))
+		for i := 0; i < b.N; i++ {
+			benchSink = strings.Index(pureScanHaystack, "quartz")
+		}
+	})
+	// Go's IndexByte for true single-byte baseline
+	b.Run("pure-scan-1MB/Go-IndexByte", func(b *testing.B) {
+		b.SetBytes(int64(len(pureScanHaystack)))
+		for i := 0; i < b.N; i++ {
+			benchSink = strings.IndexByte(pureScanHaystack, 'q')
+		}
+	})
+	if hasSVE2 {
+		b.Run("pure-scan-1MB/SVE2", func(b *testing.B) {
+			b.SetBytes(int64(len(pureScanHaystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = indexFoldNeedleSve2(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+			}
+		})
+	}
+
 	for _, tc := range testCases {
 		n := MakeNeedle(tc.needle)
 
@@ -173,11 +261,31 @@ func BenchmarkSearchNeedleVariants(b *testing.B) {
 			}
 		})
 
+		b.Run(tc.name+"/NEON-64B", func(b *testing.B) {
+			b.SetBytes(int64(len(tc.haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = indexFoldNeedleNeon64(tc.haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+			}
+		})
+
+		b.Run(tc.name+"/NEON-Fast", func(b *testing.B) {
+			b.SetBytes(int64(len(tc.haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = indexFoldNeedleNeonFast(tc.haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+			}
+		})
+
 		if hasSVE2 {
 			b.Run(tc.name+"/SVE2", func(b *testing.B) {
 				b.SetBytes(int64(len(tc.haystack)))
 				for i := 0; i < b.N; i++ {
 					benchSink = indexFoldNeedleSve2(tc.haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+				}
+			})
+			b.Run(tc.name+"/SVE2-Opt", func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = indexFoldNeedleSve2Opt(tc.haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
 				}
 			})
 		}
