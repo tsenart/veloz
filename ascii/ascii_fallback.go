@@ -144,75 +144,68 @@ func normalizeASCII(s string) string {
 	return string(b)
 }
 
-// selectRarePair finds the two rarest bytes in the needle and their offsets.
-// Returns (rare1, off1, rare2, off2) where rare1 is at off1, rare2 is at off2.
-// Prefers larger distance between the two bytes when ranks are similar.
+// selectRarePair finds the best byte pair for filtering in the needle.
+// Uses O(n²) evaluation with score = rarity_product × distance_factor.
+//
+// For custom rank tables (MakeNeedleWithRanks): uses uncapped span since the
+// ranks accurately reflect corpus frequencies - trust rarity × distance.
+//
+// For default table (MakeNeedle): caps span at 4 since default English-based
+// ranks may not match the actual corpus - be conservative with distance weight.
+//
 // If ranks is nil, uses the default byteRank table.
 func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 byte, off2 int) {
-	if len(needle) == 0 {
+	n := len(needle)
+	if n == 0 {
 		return 0, 0, 0, 0
 	}
-	if len(needle) == 1 {
+	if n == 1 {
 		return toUpper(needle[0]), 0, toUpper(needle[0]), 0
 	}
 
+	// Detect if using custom ranks vs default table
+	customRanks := ranks != nil
 	if ranks == nil {
 		ranks = byteRank[:]
 	}
 
-	// Find the two rarest bytes (using normalized/uppercase form for ranking)
-	type candidate struct {
-		norm byte // normalized (uppercase) byte
-		off  int  // offset in needle
-		rank byte // frequency rank
-	}
+	// O(n²) evaluation - fine for typical needle lengths (<64 bytes)
+	bestScore := int64(-1)
+	bestI, bestJ := 0, 1
 
-	// Initialize with first two bytes
-	c0 := candidate{toUpper(needle[0]), 0, ranks[toUpper(needle[0])]}
-	c1 := candidate{toUpper(needle[1]), 1, ranks[toUpper(needle[1])]}
+	for i := 0; i < n-1; i++ {
+		normI := toUpper(needle[i])
+		wI := 255 - int(ranks[normI])
 
-	// Keep c0 as the rarer one
-	if c1.rank < c0.rank {
-		c0, c1 = c1, c0
-	}
+		for j := i + 1; j < n; j++ {
+			normJ := toUpper(needle[j])
+			wJ := 255 - int(ranks[normJ])
 
-	// Scan rest of needle for rarer bytes
-	for i := 2; i < len(needle); i++ {
-		norm := toUpper(needle[i])
-		rank := ranks[norm]
-		if rank < c0.rank {
-			// New rarest - shift c0 to c1
-			c1 = c0
-			c0 = candidate{norm, i, rank}
-		} else if rank < c1.rank {
-			// New second-rarest
-			c1 = candidate{norm, i, rank}
-		} else if rank == c1.rank && abs(i-c0.off) > abs(c1.off-c0.off) {
-			// Same rank but larger distance - prefer it
-			c1 = candidate{norm, i, rank}
-		}
-	}
+			span := j - i
 
-	// Force different bytes: if both rare bytes are the same, find ANY different byte.
-	// This avoids high false-positive rates when a single byte dominates (e.g., '"' in JSON).
-	// Even a "common" different byte is better than two identical "rare" bytes.
-	if c0.norm == c1.norm {
-		for i := 0; i < len(needle); i++ {
-			norm := toUpper(needle[i])
-			if norm != c0.norm {
-				// Found a different byte - use it as c1, preferring max distance from c0
-				if c1.norm == c0.norm || abs(i-c0.off) > abs(c1.off-c0.off) {
-					c1 = candidate{norm, i, ranks[norm]}
-				}
+			// Custom ranks: trust rarity × full span (accurate corpus frequencies)
+			// Default ranks: cap span at 4 (conservative, English table may mismatch)
+			if !customRanks && span > 4 {
+				span = 4
+			}
+
+			// score = rarity_product × (1 + span)
+			rarity := int64(wI) * int64(wJ)
+			score := rarity * int64(1+span)
+
+			// Penalize same-byte pairs
+			if normI == normJ {
+				score /= 4
+			}
+
+			if score > bestScore {
+				bestScore = score
+				bestI, bestJ = i, j
 			}
 		}
 	}
 
-	// Return with off1 < off2 for consistent ordering
-	if c0.off < c1.off {
-		return c0.norm, c0.off, c1.norm, c1.off
-	}
-	return c1.norm, c1.off, c0.norm, c0.off
+	return toUpper(needle[bestI]), bestI, toUpper(needle[bestJ]), bestJ
 }
 
 func abs(x int) int {

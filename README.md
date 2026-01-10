@@ -184,26 +184,24 @@ The default `byteRank` table uses English letter frequency. For **JSON logs and 
 | `0` (zero) | 130 (common) | #4 (4.6%) | **#1** (22%) |
 | `{` `}` | 20 (very rare) | #17-18 | #21+ |
 
-**Benchmark: JSON logs** (72KB corpus):
+**Benchmark: UUID-heavy traces** (168KB corpus, Apple M3 Max):
 
 | Needle | Static | Computed | Speedup |
 |--------|-------:|---------:|--------:|
-| `"status":200` | 6.4 GB/s | 7.7 GB/s | **1.20x** |
-| `"user_id":` | 5.3 GB/s | 5.8 GB/s | **1.09x** |
+| `"span_id":"0002da12` | 22.1 GB/s | 30.3 GB/s | **1.37x** |
+| `"parent_id":"0003c` | 21.2 GB/s | 41.2 GB/s | **1.95x** |
 
-**Benchmark: UUID-heavy traces** (168KB corpus):
+**Algorithm**: `MakeNeedleWithRanks` uses an optimized rare-byte pair selection that balances byte rarity with distance separation. When you provide corpus-computed ranks, the algorithm trusts this frequency data and uses full `rarity × distance` scoring to find optimal filter bytes. This is particularly effective for UUID/trace ID searches where the default English-based table would pick common bytes like `"` as "rare".
 
-| Needle | Static | Computed | Speedup | Why |
-|--------|-------:|---------:|--------:|-----|
-| `"parent_id":"0003c` | 19.6 GB/s | 20.9 GB/s | **1.07x** | Static picks `"` (9.5% of corpus), computed picks `N` (1.2%) |
-| `"span_id":"0002da12` | 15.3 GB/s | 16.1 GB/s | **1.05x** | 16x fewer false positives with `S` vs `"` |
-
-**Key insight**: When the static table picks `"` as "rare", it checks 16x more candidate positions than necessary. The SIMD verification is fast, so the speedup is 5-20% rather than 16x - but it adds up.
+**When to use custom rank tables**:
+- **Best for**: UUID-heavy trace data, hex dumps, structured logs with predictable patterns
+- **Biggest wins**: Long needles with distinctive bytes spread across the pattern
+- **Setup cost**: One-time computation of 256-byte frequency table per corpus
 
 **Recommendation for logs/traces databases**:
 - Compute byte frequencies once per table/partition (256 bytes of metadata)
-- Use `MakeNeedleWithRanks` for 5-20% speedup on JSON key/UUID searches
-- Biggest wins: needles containing `"`, `:`, or `0` in JSON/trace data
+- Use `MakeNeedleWithRanks` for 30-95% speedup on UUID/trace ID searches
+- The algorithm automatically optimizes for both rarity and byte separation
 
 ```go
 // Build rank table from corpus (do once, store with data)
