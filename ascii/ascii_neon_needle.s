@@ -252,7 +252,8 @@ clear_1byte:
 	ADD   $16, R14, R14
 	CMP   $64, R14
 	BLT   check_next_chunk_1byte
-	// Exhausted this block
+exhausted_first64_1byte:
+	// Exhausted this block - check if we need second 64 bytes
 	VMOV  V4.D[0], R17
 	CBNZ  R17, check_second64_after_first
 	B     continue_1byte_check
@@ -283,7 +284,7 @@ chunk3_1byte:
 	VADDP V6.B16, V6.B16, V6.B16
 	VMOV  V6.S[0], R13
 	CBNZ  R13, try_match_1byte
-	B     continue_1byte_check
+	B     exhausted_first64_1byte
 
 verify_match_1byte:
 	// Quick checks: first and last byte
