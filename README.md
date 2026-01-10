@@ -14,9 +14,8 @@ Another motivation for veloz is maintainability. Many Go packages rely on hand-r
 - Precomputed needle search for repeated lookups (`MakeNeedle`, `SearchNeedle`)
 - Multi-character search (`IndexAny`, `ContainsAny`) - find any byte from a set
 - Fast UTF-8 validation
-- SIMD support for amd64 (AVX2, SSE4.1) and arm64 (NEON, SVE2)
+- SIMD support for amd64 (AVX2, SSE4.1) and arm64 (NEON)
 - NEON bitset (TBL2) acceleration for `IndexAny` with unlimited character sets
-- SVE2 MATCH acceleration on ARM servers (Graviton 4, Neoverse V2) for large character sets
 - Pure Go fallback for other architectures
 
 ## Installation
@@ -110,19 +109,9 @@ func main() {
 
 ### IndexAny Performance
 
-The `IndexAny` and `ContainsAny` functions use a NEON bitset approach (TBL2+TBL1 table lookups) that supports **unlimited character sets** with consistent performance. For large character sets (>32 chars) on SVE2-capable CPUs, SVE2 MATCH is used to avoid bitset building overhead.
+The `IndexAny` and `ContainsAny` functions use a NEON bitset approach (TBL2+TBL1 table lookups) that supports **unlimited character sets** with consistent performance.
 
-**Throughput by character set size (1KB data, Graviton 4):**
-
-| Chars | Go (GB/s) | NEON bitset (GB/s) | SVE2 MATCH (GB/s) | Speedup |
-|------:|----------:|-------------------:|------------------:|--------:|
-|     1 |       0.5 |                6.3 |               2.9 |   13.8x |
-|     8 |       0.5 |                6.3 |               2.9 |   13.9x |
-|    16 |       0.4 |                6.3 |               2.9 |   14.2x |
-|    32 |       0.4 |                6.3 |               2.9 |   14.7x |
-|    64 |       0.4 |                6.3 |               3.0 |   16.2x |
-
-**Throughput on Apple M3 Max (NEON only):**
+**Throughput on Apple M3 Max:**
 
 | Chars | Go (GB/s) | NEON bitset (GB/s) | Speedup |
 |------:|----------:|-------------------:|--------:|
@@ -130,27 +119,26 @@ The `IndexAny` and `ContainsAny` functions use a NEON bitset approach (TBL2+TBL1
 |    16 |       2.2 |               25.9 |   11.6x |
 |    64 |       1.9 |               25.8 |   13.8x |
 
-*The NEON bitset uses ARM's TBL2 instruction for 32-byte table lookups, which is heavily optimized for cryptographic operations. This approach outperforms both the traditional compare-chain method and SVE2 MATCH for small-to-medium character sets.*
+*The NEON bitset uses ARM's TBL2 instruction for 32-byte table lookups, which is heavily optimized for cryptographic operations.*
 
 ### SearchNeedle Performance
 
-For repeated case-insensitive searches with the same needle, `SearchNeedle` with a precomputed `Needle` is faster than `IndexFold`. It combines techniques from [memchr](https://github.com/BurntSushi/memchr) (rare-byte selection) and [Sneller](https://github.com/SnellerInc/sneller) (compare+XOR normalization, tail masking):
+For repeated case-insensitive searches with the same needle, `SearchNeedle` with a precomputed `Needle` is faster than `IndexFold`. It uses an adaptive NEON implementation that combines techniques from [memchr](https://github.com/BurntSushi/memchr) (rare-byte selection) and [Sneller](https://github.com/SnellerInc/sneller) (compare+XOR normalization, tail masking):
 
 - **Rare-byte selection**: Picks the two rarest bytes in the needle (using English frequency table) to minimize false positives
+- **Adaptive filtering**: Starts with 1-byte fast path (~29 GB/s pure scan), switches to 2-byte filtering when false positives exceed threshold
 - **Compare+XOR normalization**: ~4 NEON instructions instead of table lookups for case folding
 - **Tail masking**: No scalar remainder loop - handles tail with SIMD masks
-- **SVE2 acceleration**: On Graviton 4/Neoverse V2, uses `svmatch` for 2-cycle rare-byte matching
 
-**Throughput (Graviton 4 with SVE2):**
+**Throughput (Graviton 3):**
 
-| Function     | Needle Type | Throughput (GB/s) | vs IndexFold |
-|--------------|-------------|------------------:|-------------:|
-| IndexFold    | common      |               2.2 |          1.0x |
-| SearchNeedle | common      |               5.3 |          2.4x |
-| IndexFold    | rare bytes  |               2.2 |          1.0x |
-| SearchNeedle | rare bytes  |               5.5 |          2.5x |
+| Scenario | NEON (GB/s) | Go strings.Index (GB/s) | Speedup |
+|----------|------------:|------------------------:|--------:|
+| Pure scan (no match) | 29.4 | 32.5 | 0.9x |
+| Match at end | 29.3 | 32.4 | 0.9x |
+| High false-positive (JSON) | 15.0 | 2.6 | **5.8x** |
 
-**Throughput (Apple M3 Max, NEON only):**
+**Throughput (Apple M3 Max):**
 
 | Function     | Needle Type | Throughput (GB/s) | vs IndexFold |
 |--------------|-------------|------------------:|-------------:|
@@ -159,7 +147,7 @@ For repeated case-insensitive searches with the same needle, `SearchNeedle` with
 | IndexFold    | rare bytes  |              11.1 |          1.0x |
 | SearchNeedle | rare bytes  |              19.0 |          1.7x |
 
-*SearchNeedle uses SVE2's `svmatch` instruction when available, which matches up to 16 tokens in 2 cycles on Neoverse-N2/V2. Falls back to NEON on older ARM CPUs and Apple Silicon.*
+*The NEON implementation excels when the haystack has many false-positive candidates (e.g., JSON with many quote characters). In pure scan scenarios, it achieves ~90% of Go's case-sensitive strings.Index speed while providing case-insensitive matching.*
 
 #### Needle Reuse Across Many Haystacks
 

@@ -1,6 +1,7 @@
 package ascii
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -731,16 +732,63 @@ func buildBitset(chars string) (uint64, uint64, uint64, uint64) {
 	return bitset[0], bitset[1], bitset[2], bitset[3]
 }
 
+// indexFoldNaive is a trivially-correct reference for validating indexFoldGo.
+// It performs ASCII-only case folding (bytes >= 0x80 are unchanged).
+func indexFoldNaive(s, substr string) int {
+	if len(substr) == 0 {
+		return 0
+	}
+	if len(substr) > len(s) {
+		return -1
+	}
+	us := toUpperASCII(s)
+	un := toUpperASCII(substr)
+	return strings.Index(us, un)
+}
+
+// toUpperASCII converts ASCII lowercase to uppercase, leaving other bytes unchanged.
+func toUpperASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'a' && c <= 'z' {
+			b[i] = c - 0x20
+		}
+	}
+	return string(b)
+}
+
+// indexAnyNaive is a trivially-correct reference for validating indexAnyGo.
+func indexAnyNaive(s, chars string) int {
+	for i := 0; i < len(s); i++ {
+		for j := 0; j < len(chars); j++ {
+			if s[i] == chars[j] {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
 func FuzzIndexAny(f *testing.F) {
 	f.Add("hello world", " ")
 	f.Add("abcdefghij", "xyz")
 	f.Add(strings.Repeat("a", 100), "b")
+	// Edge cases for high bytes
+	f.Add("abc\x80def", "\x80")
+	f.Add("\xff\xfe\xfd", "\xfd")
+	f.Add(strings.Repeat("x", 17)+"\x00", "\x00")
 
 	f.Fuzz(func(t *testing.T, s, chars string) {
+		want := indexAnyNaive(s, chars)
+
 		got := IndexAny(s, chars)
-		want := indexAnyGo(s, chars)
 		if got != want {
 			t.Fatalf("IndexAny(%q, %q) = %d, want %d", s, chars, got, want)
+		}
+
+		goRes := indexAnyGo(s, chars)
+		if goRes != want {
+			t.Fatalf("indexAnyGo(%q, %q) = %d, want %d", s, chars, goRes, want)
 		}
 	})
 }
@@ -775,21 +823,29 @@ func FuzzIndexFold(f *testing.F) {
 	f.Add("000000000000000B0", "B0")
 	f.Add("EqualFold", "fold")
 	f.Add("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor...", " ELIT")
+	// Non-ASCII seeds
+	f.Add("\x80ABC", "abc")
+	f.Add("abc\x80def", "\x80d")
+	f.Add("test\xfe\xffend", "\xfe\xff")
+	f.Add(strings.Repeat("\x80", 100)+"needle", "NEEDLE")
 
 	f.Fuzz(func(t *testing.T, istr, isubstr string) {
-		if !ValidString(isubstr) {
-			t.Skip()
-		}
+		// Ground truth from naive implementation
+		want := indexFoldNaive(istr, isubstr)
 
 		res := IndexFold(istr, isubstr)
-		goRes := indexFoldGo(istr, isubstr)
-		if res != goRes {
-			t.Fatalf("IndexFold(%q, %q) = %v; want %v", istr, isubstr, res, goRes)
+		if res != want {
+			t.Fatalf("IndexFold(%q, %q) = %v; want %v", istr, isubstr, res, want)
 		}
 
-		res = indexFoldRabinKarp(istr, isubstr)
-		if res != goRes {
-			t.Fatalf("indexFoldRabinKarp(%q, %q) = %v; want %v", istr, isubstr, res, goRes)
+		goRes := indexFoldGo(istr, isubstr)
+		if goRes != want {
+			t.Fatalf("indexFoldGo(%q, %q) = %v; want %v", istr, isubstr, goRes, want)
+		}
+
+		rkRes := indexFoldRabinKarp(istr, isubstr)
+		if rkRes != want {
+			t.Fatalf("indexFoldRabinKarp(%q, %q) = %v; want %v", istr, isubstr, rkRes, want)
 		}
 	})
 }
@@ -860,7 +916,7 @@ func TestSearchNeedle(t *testing.T) {
 	}
 }
 
-func TestNeon128B(t *testing.T) {
+func TestAdaptive(t *testing.T) {
 	tests := []struct {
 		haystack, needle string
 		want             int
@@ -888,9 +944,9 @@ func TestNeon128B(t *testing.T) {
 
 	for _, tt := range tests {
 		n := MakeNeedle(tt.needle)
-		got := indexFoldNeedleNeon128(tt.haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+		got := SearchNeedle(tt.haystack, n)
 		if got != tt.want {
-			t.Errorf("indexFoldNeedleNeon128(%q..., %q) = %d, want %d",
+			t.Errorf("SearchNeedle(%q..., %q) = %d, want %d",
 				truncate(tt.haystack, 30), tt.needle, got, tt.want)
 		}
 	}
@@ -924,6 +980,229 @@ func TestSelectRarePair(t *testing.T) {
 			t.Errorf("selectRarePair(%q): rare1 is 0", tt.needle)
 		}
 		t.Logf("selectRarePair(%q) = (%c, %c)", tt.needle, rare1, rare2)
+	}
+}
+
+func TestNeedleLengthVariations(t *testing.T) {
+	lengths := []int{1, 2, 3, 4, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65}
+
+	for _, needleLen := range lengths {
+		t.Run(fmt.Sprintf("len%d", needleLen), func(t *testing.T) {
+			needle := strings.Repeat("x", needleLen)
+			if needleLen > 1 {
+				b := []byte(needle)
+				b[1] = 'Q'
+				if needleLen > 2 {
+					b[needleLen-1] = 'Z'
+				}
+				needle = string(b)
+			}
+
+			haystack := strings.Repeat("a", 256) + needle + strings.Repeat("b", 256)
+			n := MakeNeedle(needle)
+			want := indexFoldGo(haystack, needle)
+
+			if got := SearchNeedle(haystack, n); got != want {
+				t.Errorf("got %d, want %d (needle=%q)", got, want, needle)
+			}
+		})
+	}
+}
+
+func TestNeedleLengthNotFound(t *testing.T) {
+	lengths := []int{1, 2, 3, 4, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65}
+	haystack := strings.Repeat("abcdefghijklmnop", 100)
+
+	for _, needleLen := range lengths {
+		t.Run(fmt.Sprintf("len%d", needleLen), func(t *testing.T) {
+			needle := strings.Repeat("Q", needleLen)
+			if needleLen > 1 {
+				b := []byte(needle)
+				b[needleLen-1] = 'Z'
+				needle = string(b)
+			}
+
+			n := MakeNeedle(needle)
+			if got := SearchNeedle(haystack, n); got != -1 {
+				t.Errorf("got %d, want -1 (needle=%q)", got, needle)
+			}
+		})
+	}
+}
+
+func TestAlignmentVariations(t *testing.T) {
+	needle := "QZXY"
+	n := MakeNeedle(needle)
+
+	for align := 0; align <= 127; align++ {
+		t.Run(fmt.Sprintf("align%d", align), func(t *testing.T) {
+			haystack := string(bytes.Repeat([]byte{'a'}, align)) + needle + strings.Repeat("b", 256)
+			want := indexFoldGo(haystack, needle)
+
+			if got := SearchNeedle(haystack, n); got != want {
+				t.Errorf("got %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestChunkBoundaryStraddle(t *testing.T) {
+	boundaries := []int{16, 32, 64, 128}
+	needleLens := []int{4, 8, 16}
+
+	for _, boundary := range boundaries {
+		for _, needleLen := range needleLens {
+			for offset := 1; offset <= 3; offset++ {
+				startPos := boundary - offset
+				if startPos < 0 {
+					continue
+				}
+
+				t.Run(fmt.Sprintf("b%d/n%d/o%d", boundary, needleLen, offset), func(t *testing.T) {
+					needle := strings.Repeat("Q", needleLen)
+					if needleLen > 1 {
+						b := []byte(needle)
+						b[needleLen-1] = 'Z'
+						needle = string(b)
+					}
+					n := MakeNeedle(needle)
+
+					haystack := string(bytes.Repeat([]byte{'a'}, startPos)) + needle + strings.Repeat("b", 256)
+					want := indexFoldGo(haystack, needle)
+
+					if got := SearchNeedle(haystack, n); got != want {
+						t.Errorf("got %d, want %d", got, want)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestHighFalsePositiveJSON(t *testing.T) {
+	jsonData := strings.Repeat(`{"key":"value","cnt":123},`, 100)
+	needle := `"num"`
+
+	testCases := []struct {
+		name     string
+		haystack string
+		want     int
+	}{
+		{"not_found", jsonData, -1},
+		{"at_end", jsonData + `{"num":999}`, len(jsonData) + 1},
+		{"at_start", `{"num":0}` + jsonData, 1},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := MakeNeedle(needle)
+			want := indexFoldGo(tc.haystack, needle)
+
+			if got := SearchNeedle(tc.haystack, n); got != want {
+				t.Errorf("got %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestSameCharNeedle(t *testing.T) {
+	haystack := strings.Repeat("a", 10000) + "aab"
+	needle := "aab"
+	n := MakeNeedle(needle)
+	want := 10000
+
+	if got := SearchNeedle(haystack, n); got != want {
+		t.Errorf("got %d, want %d", got, want)
+	}
+}
+
+func TestCaseFolding(t *testing.T) {
+	testCases := []struct {
+		haystack, needle string
+		want             int
+	}{
+		{"HELLO WORLD", "world", 6},
+		{"hello world", "WORLD", 6},
+		{"HeLLo WoRLd", "world", 6},
+		{"abcXYZdef", "xyz", 3},
+		{"ABCxyzDEF", "XYZ", 3},
+		{"The Quick Brown Fox", "QUICK", 4},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.needle, func(t *testing.T) {
+			n := MakeNeedle(tc.needle)
+			if got := SearchNeedle(tc.haystack, n); got != tc.want {
+				t.Errorf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNeedleEdgeCases(t *testing.T) {
+	testCases := []struct {
+		name             string
+		haystack, needle string
+		want             int
+	}{
+		{"empty_needle", "hello", "", 0},
+		{"empty_haystack", "", "a", -1},
+		{"needle_longer", "abc", "abcdef", -1},
+		{"exact_match", "test", "test", 0},
+		{"at_start", "hello world", "hello", 0},
+		{"at_end", "hello world", "world", 6},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := MakeNeedle(tc.needle)
+			if got := SearchNeedle(tc.haystack, n); got != tc.want {
+				t.Errorf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMultipleMatches(t *testing.T) {
+	haystack := "abcxyzdefxyzghixyz"
+	needle := "xyz"
+	n := MakeNeedle(needle)
+
+	if got := SearchNeedle(haystack, n); got != 3 {
+		t.Errorf("got %d, want 3 (first match)", got)
+	}
+}
+
+func TestMatchAtEnd(t *testing.T) {
+	sizes := []int{16, 32, 64, 128, 256, 1024, 4096}
+	needle := "QZXY"
+	n := MakeNeedle(needle)
+
+	for _, size := range sizes {
+		t.Run(fmt.Sprintf("size%d", size), func(t *testing.T) {
+			haystack := strings.Repeat("a", size-len(needle)) + needle
+			want := size - len(needle)
+
+			if got := SearchNeedle(haystack, n); got != want {
+				t.Errorf("got %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestMatchAtStart(t *testing.T) {
+	sizes := []int{16, 32, 64, 128, 256, 1024, 4096}
+	needle := "QZXY"
+	n := MakeNeedle(needle)
+
+	for _, size := range sizes {
+		t.Run(fmt.Sprintf("size%d", size), func(t *testing.T) {
+			haystack := needle + strings.Repeat("a", size-len(needle))
+
+			if got := SearchNeedle(haystack, n); got != 0 {
+				t.Errorf("got %d, want 0", got)
+			}
+		})
 	}
 }
 
@@ -1248,6 +1527,13 @@ func FuzzSearchNeedle(f *testing.F) {
 	f.Add(strings.Repeat("y", 31)+"z", "z")
 	// Combined: multiple candidates AND in tail
 	f.Add(strings.Repeat("QZ", 8)+"xQZmatch", "QZmatch")
+	// Non-ASCII seeds
+	f.Add("\x80ABC", "abc")
+	f.Add(strings.Repeat("\x80", 100)+"needle", "NEEDLE")
+	f.Add("abc\x80def", "\x80d")
+	// 2-byte mode forcing: rare1 common in haystack, rare2 absent
+	f.Add(strings.Repeat("Q", 1000), "Q"+strings.Repeat("a", 30)+"Z")
+	f.Add(strings.Repeat("Q", 1000)+"Q"+strings.Repeat("a", 30)+"Z", "Q"+strings.Repeat("a", 30)+"Z")
 
 	f.Fuzz(func(t *testing.T, haystack, needle string) {
 		n := MakeNeedle(needle)
@@ -1255,6 +1541,12 @@ func FuzzSearchNeedle(f *testing.F) {
 		want := indexFoldGo(haystack, needle)
 		if got != want {
 			t.Fatalf("SearchNeedle(%q, %q) = %d, want %d", haystack, needle, got, want)
+		}
+		// Cross-validate with IndexFold
+		ifRes := IndexFold(haystack, needle)
+		if got != ifRes {
+			t.Fatalf("SearchNeedle vs IndexFold mismatch: SearchNeedle(%q, %q) = %d, IndexFold = %d",
+				haystack, needle, got, ifRes)
 		}
 	})
 }

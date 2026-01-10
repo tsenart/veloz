@@ -322,7 +322,7 @@ Example:
 ```
 R13 = 0x0000000000000104  (bits 2 and 8 are set)
 After RBIT: 0x2080000000000000  (bits are reversed)
-After CLZ: 1  (one leading zero before first 1)
+After CLZ: 2  (two leading zeros before first 1, at bit 61)
 ```
 
 Then we convert bit position to byte position:
@@ -359,10 +359,12 @@ This clears the bit we just tried **and all lower bits**, so the next RBIT+CLZ f
 
 Example:
 ```
-R13 = 0x00000044  (matches at positions 2 and 6)
+R13 = 0x00001010  (matches at byte positions 2 and 6)
+                   (position 2 → bit 4, position 6 → bit 12)
 We tried position 2, it failed.
-Mask = 0x0000003F  (bits 0-5 set)
-After BIC: R13 = 0x00000040  (only position 6 remains)
+byte_position + 1 = 3, ×2 = 6
+Mask = (1 << 6) - 1 = 0x0000003F  (bits 0-5 set)
+After BIC: R13 = 0x00001000  (only position 6 remains)
 ```
 
 ---
@@ -447,7 +449,7 @@ VEOR  V10.B16, V11.B16, V10.B16   // V10 = haystack XOR needle
 ```
 If bytes are equal, XOR produces 0. Differences produce non-zero.
 
-**Step 2: Detect letters**
+**Step 2: Detect lowercase letters in haystack**
 ```asm
 VADD  V4.B16, V10.B16, V12.B16    // V12 = haystack + 159
 ```
@@ -459,14 +461,21 @@ WORD  $0x6e2c34ec   // CMHI V12.16B, V7.16B, V12.16B
 This is `CMHI` (Compare Higher, unsigned). V7 contains 26 in each byte. 
 Result: `V12[i] = (26 > V12[i]) ? 0xFF : 0x00`
 
-If `(haystack_byte - 'a') < 26`, the byte is a lowercase letter.
+If `(haystack_byte - 'a') < 26`, the byte is a **lowercase** letter (a-z).
 
 **Step 3: Mask out case differences**
 ```asm
-VAND  V8.B16, V12.B16, V12.B16    // V12 = is_letter ? 0x20 : 0x00
+VAND  V8.B16, V12.B16, V12.B16    // V12 = is_lowercase ? 0x20 : 0x00
 VEOR  V12.B16, V10.B16, V10.B16   // XOR with differences
 ```
-V8 contains 0x20 (32) in each byte. For letters, this XORs 0x20 into the difference, which cancels out case differences (since 'A' XOR 'a' = 0x20).
+V8 contains 0x20 (32) in each byte.
+
+**Key insight**: The needle is **pre-normalized to uppercase**. So:
+- If haystack is uppercase 'A' and needle is 'A': XOR=0, mask=0, final=0 ✓
+- If haystack is lowercase 'a' and needle is 'A': XOR=0x20, mask=0x20, final=0 ✓
+- If haystack is 'a' and needle is 'B': XOR=0x23, mask=0x20, final=0x03 ✗
+
+The 0x20 mask cancels out the case difference only when comparing the same letter.
 
 **Step 4: Check for any mismatches**
 ```asm

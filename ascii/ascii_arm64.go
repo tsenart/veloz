@@ -2,13 +2,6 @@
 
 package ascii
 
-import (
-	"golang.org/x/sys/cpu"
-)
-
-var hasSVE = cpu.ARM64.HasSVE
-var hasSVE2 = cpu.ARM64.HasSVE2
-
 // CharSet represents a precomputed character set for fast IndexAny lookups.
 // Build once with MakeCharSet, then reuse with IndexAnyCharSet.
 type CharSet struct {
@@ -75,7 +68,6 @@ func IndexAny(data, chars string) int {
 // - Sneller's compare+XOR normalization (no table lookup)
 // - Sneller's tail masking (no scalar remainder)
 // For repeated searches with the same needle, this is faster than IndexFold.
-// On SVE2-capable CPUs (Graviton 4, Neoverse V2), uses svmatch for even faster matching.
 func SearchNeedle(haystack string, n Needle) int {
 	if len(n.raw) == 0 {
 		return 0
@@ -87,16 +79,5 @@ func SearchNeedle(haystack string, n Needle) int {
 	if len(haystack) < 16 {
 		return indexFoldGo(haystack, n.raw)
 	}
-	// Use SVE path on Graviton 3 (256-bit vectors, 2× throughput)
-	// SVE2 was removed - only G3 SVE (non-SVE2) is supported
-	if hasSVE && !hasSVE2 {
-		return indexFoldNeedleSveG3(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
-	}
-	// Frequency-based algorithm selection:
-	// - If rare1 is truly rare (frequency < threshold): use adaptive 1-byte fast path
-	// - Otherwise: use 2-byte NEON directly (avoids cutover overhead)
-	if isRareByte(n.rare1) {
-		return indexFoldNeedleAdaptive(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
-	}
-	return IndexFoldNeedle(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+	return indexFoldNeedleNEON(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
 }

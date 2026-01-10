@@ -18,8 +18,8 @@
 
 #include "textflag.h"
 
-// func indexFoldNeedleAdaptive(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, normNeedle string) int
-TEXT ·indexFoldNeedleAdaptive(SB), NOSPLIT, $0-72
+// func indexFoldNeedleNEON(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, normNeedle string) int
+TEXT ·indexFoldNeedleNEON(SB), NOSPLIT, $0-72
 	MOVD  haystack+0(FP), R0      // R0 = haystack ptr
 	MOVD  haystack_len+8(FP), R1  // R1 = haystack len
 	MOVBU rare1+16(FP), R2        // R2 = rare1 byte
