@@ -22,29 +22,37 @@ func BenchmarkPureScan(b *testing.B) {
 		{"16MB", 16 * 1024 * 1024},
 	}
 
-	needle := MakeNeedle("quartz")
+	needleStr := "quartz"
+	needle := MakeNeedle(needleStr)
 
 	for _, s := range sizes {
 		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24)
 
-		b.Run(s.name+"/NEON", func(b *testing.B) {
+		b.Run(s.name+"/strings.Index", func(b *testing.B) {
 			b.SetBytes(int64(len(haystack)))
 			for i := 0; i < b.N; i++ {
-				benchSink = indexFoldNeedleNEON(haystack, needle.rare1, needle.off1, needle.rare2, needle.off2, needle.norm)
+				benchSink = strings.Index(haystack, needleStr)
 			}
 		})
 
-		b.Run(s.name+"/Go-Index", func(b *testing.B) {
+		b.Run(s.name+"/IndexFold", func(b *testing.B) {
 			b.SetBytes(int64(len(haystack)))
 			for i := 0; i < b.N; i++ {
-				benchSink = strings.Index(haystack, "quartz")
+				benchSink = IndexFold(haystack, needleStr)
+			}
+		})
+
+		b.Run(s.name+"/SearchNeedle", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = SearchNeedle(haystack, needle)
 			}
 		})
 	}
 }
 
-// BenchmarkMatchAtEndNEON tests full scan + verification (typical case).
-func BenchmarkMatchAtEndNEON(b *testing.B) {
+// BenchmarkMatchAtEnd tests full scan + verification (typical case).
+func BenchmarkMatchAtEnd(b *testing.B) {
 	sizes := []struct {
 		name string
 		size int
@@ -60,17 +68,24 @@ func BenchmarkMatchAtEndNEON(b *testing.B) {
 	for _, s := range sizes {
 		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24) + needleStr
 
-		b.Run(s.name+"/NEON", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = indexFoldNeedleNEON(haystack, needle.rare1, needle.off1, needle.rare2, needle.off2, needle.norm)
-			}
-		})
-
-		b.Run(s.name+"/Go-Index", func(b *testing.B) {
+		b.Run(s.name+"/strings.Index", func(b *testing.B) {
 			b.SetBytes(int64(len(haystack)))
 			for i := 0; i < b.N; i++ {
 				benchSink = strings.Index(haystack, needleStr)
+			}
+		})
+
+		b.Run(s.name+"/IndexFold", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = IndexFold(haystack, needleStr)
+			}
+		})
+
+		b.Run(s.name+"/SearchNeedle", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = SearchNeedle(haystack, needle)
 			}
 		})
 	}
@@ -95,17 +110,24 @@ func BenchmarkHighFalsePositive(b *testing.B) {
 	for _, s := range sizes {
 		jsonHaystack := strings.Repeat(jsonPattern, s.size/len(jsonPattern)) + `{"num":999}`
 
-		b.Run("JSON-"+s.name+"/NEON", func(b *testing.B) {
-			b.SetBytes(int64(len(jsonHaystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = indexFoldNeedleNEON(jsonHaystack, jsonNeedle.rare1, jsonNeedle.off1, jsonNeedle.rare2, jsonNeedle.off2, jsonNeedle.norm)
-			}
-		})
-
-		b.Run("JSON-"+s.name+"/Go-Index", func(b *testing.B) {
+		b.Run("JSON-"+s.name+"/strings.Index", func(b *testing.B) {
 			b.SetBytes(int64(len(jsonHaystack)))
 			for i := 0; i < b.N; i++ {
 				benchSink = strings.Index(jsonHaystack, jsonNeedleStr)
+			}
+		})
+
+		b.Run("JSON-"+s.name+"/IndexFold", func(b *testing.B) {
+			b.SetBytes(int64(len(jsonHaystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = IndexFold(jsonHaystack, jsonNeedleStr)
+			}
+		})
+
+		b.Run("JSON-"+s.name+"/SearchNeedle", func(b *testing.B) {
+			b.SetBytes(int64(len(jsonHaystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = SearchNeedle(jsonHaystack, jsonNeedle)
 			}
 		})
 	}
@@ -117,10 +139,10 @@ func BenchmarkHighFalsePositive(b *testing.B) {
 	for _, s := range sizes {
 		sameCharHaystack := strings.Repeat("a", s.size) + "aab"
 
-		b.Run("SameChar-"+s.name+"/NEON", func(b *testing.B) {
+		b.Run("SameChar-"+s.name+"/SearchNeedle", func(b *testing.B) {
 			b.SetBytes(int64(len(sameCharHaystack)))
 			for i := 0; i < b.N; i++ {
-				benchSink = indexFoldNeedleNEON(sameCharHaystack, sameCharNeedle.rare1, sameCharNeedle.off1, sameCharNeedle.rare2, sameCharNeedle.off2, sameCharNeedle.norm)
+				benchSink = SearchNeedle(sameCharHaystack, sameCharNeedle)
 			}
 		})
 	}
@@ -169,20 +191,27 @@ func BenchmarkNonLetterNeedle(b *testing.B) {
 	needle := MakeNeedle(needleStr)
 
 	for _, s := range sizes {
-		// Haystack without digits
+		// Haystack without digits (pure scan, no match)
 		haystack := strings.Repeat("abcdefghijklmnopqrstuvwxyz", s.size/26)
 
-		b.Run("PureScan-"+s.name+"/NEON", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = indexFoldNeedleNEON(haystack, needle.rare1, needle.off1, needle.rare2, needle.off2, needle.norm)
-			}
-		})
-
-		b.Run("PureScan-"+s.name+"/Go-Index", func(b *testing.B) {
+		b.Run("PureScan-"+s.name+"/strings.Index", func(b *testing.B) {
 			b.SetBytes(int64(len(haystack)))
 			for i := 0; i < b.N; i++ {
 				benchSink = strings.Index(haystack, needleStr)
+			}
+		})
+
+		b.Run("PureScan-"+s.name+"/IndexFold", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = IndexFold(haystack, needleStr)
+			}
+		})
+
+		b.Run("PureScan-"+s.name+"/SearchNeedle", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = SearchNeedle(haystack, needle)
 			}
 		})
 	}
@@ -191,18 +220,27 @@ func BenchmarkNonLetterNeedle(b *testing.B) {
 	for _, s := range sizes {
 		haystack := strings.Repeat("abcdefghijklmnopqrstuvwxyz", s.size/26) + needleStr
 
-		b.Run("MatchEnd-"+s.name+"/NEON", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = indexFoldNeedleNEON(haystack, needle.rare1, needle.off1, needle.rare2, needle.off2, needle.norm)
-			}
-		})
-
-		b.Run("MatchEnd-"+s.name+"/Go-Index", func(b *testing.B) {
+		b.Run("MatchEnd-"+s.name+"/strings.Index", func(b *testing.B) {
 			b.SetBytes(int64(len(haystack)))
 			for i := 0; i < b.N; i++ {
 				benchSink = strings.Index(haystack, needleStr)
 			}
 		})
+
+		b.Run("MatchEnd-"+s.name+"/IndexFold", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = IndexFold(haystack, needleStr)
+			}
+		})
+
+		b.Run("MatchEnd-"+s.name+"/SearchNeedle", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = SearchNeedle(haystack, needle)
+			}
+		})
 	}
 }
+
+

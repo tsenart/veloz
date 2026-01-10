@@ -20,7 +20,4 @@ func EqualFold(a string, b string) bool
 func indexFoldRabinKarp(a string, b string) int
 
 //go:noescape
-func IndexFold(a string, b string) int
-
-//go:noescape
 func IndexFoldNeedle(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, normNeedle string) int

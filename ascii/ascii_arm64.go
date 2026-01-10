@@ -62,6 +62,25 @@ func IndexAny(data, chars string) int {
 	return indexAnyNeonBitset(data, bitset[0], bitset[1], bitset[2], bitset[3])
 }
 
+// IndexFold finds the first case-insensitive match of needle in haystack.
+// Uses the same optimized NEON path as SearchNeedle but computes rare bytes inline.
+func IndexFold(haystack, needle string) int {
+	if len(needle) == 0 {
+		return 0
+	}
+	if len(haystack) < len(needle) {
+		return -1
+	}
+	// For very short haystacks, use Go fallback
+	if len(haystack) < 16 {
+		return indexFoldGo(haystack, needle)
+	}
+	// Compute rare bytes and normalized needle inline
+	rare1, off1, rare2, off2 := selectRarePair(needle, nil)
+	norm := normalizeASCII(needle)
+	return indexFoldNeedleNEON(haystack, rare1, off1, rare2, off2, norm)
+}
+
 // SearchNeedle finds the first case-insensitive match of the precomputed needle in haystack.
 // This is the optimized entry point that uses:
 // - memchr's rare byte selection (fewer false positives)

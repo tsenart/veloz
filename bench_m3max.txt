@@ -1,0 +1,40 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/mhr3/veloz/ascii
+cpu: Apple M3 Max
+BenchmarkPureScan/1KB/NEON-16    	131237874	        18.24 ns/op	55266.81 MB/s
+BenchmarkPureScan/1KB/Go-Index-16         	159410089	        15.20 ns/op	66317.47 MB/s
+BenchmarkPureScan/64KB/NEON-16            	 2489799	       965.4 ns/op	67867.76 MB/s
+BenchmarkPureScan/64KB/Go-Index-16        	 3030206	       792.0 ns/op	82725.07 MB/s
+BenchmarkPureScan/1MB/NEON-16             	  156020	     15309 ns/op	68495.18 MB/s
+BenchmarkPureScan/1MB/Go-Index-16         	  190682	     12594 ns/op	83256.38 MB/s
+BenchmarkPureScan/16MB/NEON-16            	    9584	    249631 ns/op	67208.02 MB/s
+BenchmarkPureScan/16MB/Go-Index-16        	   10000	    205896 ns/op	81483.95 MB/s
+BenchmarkMatchAtEndNEON/1KB/NEON-16       	100000000	        23.45 ns/op	43370.79 MB/s
+BenchmarkMatchAtEndNEON/1KB/Go-Index-16   	138454342	        17.35 ns/op	58606.78 MB/s
+BenchmarkMatchAtEndNEON/64KB/NEON-16      	 2425440	       969.6 ns/op	67582.72 MB/s
+BenchmarkMatchAtEndNEON/64KB/Go-Index-16  	 3001912	       806.1 ns/op	81288.14 MB/s
+BenchmarkMatchAtEndNEON/1MB/NEON-16       	  155184	     15330 ns/op	68397.83 MB/s
+BenchmarkMatchAtEndNEON/1MB/Go-Index-16   	  189025	     12706 ns/op	82523.55 MB/s
+BenchmarkHighFalsePositive/JSON-2KB/NEON-16         	29961284	        77.36 ns/op	26358.88 MB/s
+BenchmarkHighFalsePositive/JSON-2KB/Go-Index-16     	 3501304	       691.1 ns/op	2950.37 MB/s
+BenchmarkHighFalsePositive/JSON-64KB/NEON-16        	 1206878	      1964 ns/op	33363.95 MB/s
+BenchmarkHighFalsePositive/JSON-64KB/Go-Index-16    	  123237	     19482 ns/op	3363.69 MB/s
+BenchmarkHighFalsePositive/JSON-1MB/NEON-16         	   77425	     31151 ns/op	33660.70 MB/s
+BenchmarkHighFalsePositive/JSON-1MB/Go-Index-16     	    7700	    312948 ns/op	3350.60 MB/s
+BenchmarkHighFalsePositive/SameChar-2KB/NEON-16     	31815768	        75.57 ns/op	27140.25 MB/s
+BenchmarkHighFalsePositive/SameChar-64KB/NEON-16    	 1225531	      1951 ns/op	33588.80 MB/s
+BenchmarkHighFalsePositive/SameChar-1MB/NEON-16     	   77635	     30786 ns/op	34060.76 MB/s
+BenchmarkNonLetterNeedle/PureScan-1KB/NEON-16       	180296965	        13.37 ns/op	75814.85 MB/s
+BenchmarkNonLetterNeedle/PureScan-1KB/Go-Index-16   	162223110	        14.71 ns/op	68925.87 MB/s
+BenchmarkNonLetterNeedle/PureScan-64KB/NEON-16      	 3570850	       676.1 ns/op	96907.80 MB/s
+BenchmarkNonLetterNeedle/PureScan-64KB/Go-Index-16  	 3017034	       793.5 ns/op	82566.37 MB/s
+BenchmarkNonLetterNeedle/PureScan-1MB/NEON-16       	  203492	     11710 ns/op	89544.92 MB/s
+BenchmarkNonLetterNeedle/PureScan-1MB/Go-Index-16   	  184497	     12671 ns/op	82750.56 MB/s
+BenchmarkNonLetterNeedle/MatchEnd-1KB/NEON-16       	138068146	        17.59 ns/op	57918.15 MB/s
+BenchmarkNonLetterNeedle/MatchEnd-1KB/Go-Index-16   	137369166	        17.62 ns/op	57827.88 MB/s
+BenchmarkNonLetterNeedle/MatchEnd-64KB/NEON-16      	 3394305	       705.4 ns/op	92884.55 MB/s
+BenchmarkNonLetterNeedle/MatchEnd-64KB/Go-Index-16  	 2900656	       810.4 ns/op	80855.61 MB/s
+BenchmarkNonLetterNeedle/MatchEnd-1MB/NEON-16       	  196560	     12176 ns/op	86116.03 MB/s
+BenchmarkNonLetterNeedle/MatchEnd-1MB/Go-Index-16   	  184851	     13023 ns/op	80516.53 MB/s
+PASS

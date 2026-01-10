@@ -1,0 +1,22 @@
+goos: linux
+goarch: arm64
+pkg: github.com/mhr3/veloz/ascii
+BenchmarkFullComparison/1KB/strings.Index         	75628410	        31.73 ns/op	31954.06 MB/s
+BenchmarkFullComparison/1KB/IndexFold             	43901718	        54.72 ns/op	18531.76 MB/s
+BenchmarkFullComparison/1KB/SearchNeedle          	60212403	        39.70 ns/op	25540.84 MB/s
+BenchmarkFullComparison/64KB/strings.Index        	 1555411	      1543 ns/op	42464.38 MB/s
+BenchmarkFullComparison/64KB/IndexFold            	 1468006	      1634 ns/op	40098.29 MB/s
+BenchmarkFullComparison/64KB/SearchNeedle         	 1480507	      1621 ns/op	40428.88 MB/s
+BenchmarkFullComparison/1MB/strings.Index         	   91756	     27310 ns/op	38394.54 MB/s
+BenchmarkFullComparison/1MB/IndexFold             	   82680	     28981 ns/op	36181.39 MB/s
+BenchmarkFullComparison/1MB/SearchNeedle          	   82707	     28956 ns/op	36211.99 MB/s
+BenchmarkFullComparison/JSON-1KB/strings.Index    	 5466718	       438.8 ns/op	2335.91 MB/s
+BenchmarkFullComparison/JSON-1KB/IndexFold        	23019181	       104.1 ns/op	9845.34 MB/s
+BenchmarkFullComparison/JSON-1KB/SearchNeedle     	26335008	        91.04 ns/op	11258.33 MB/s
+BenchmarkFullComparison/JSON-64KB/strings.Index   	  101910	     23544 ns/op	2783.37 MB/s
+BenchmarkFullComparison/JSON-64KB/IndexFold       	  651124	      3687 ns/op	17772.09 MB/s
+BenchmarkFullComparison/JSON-64KB/SearchNeedle    	  654326	      3664 ns/op	17884.99 MB/s
+BenchmarkFullComparison/JSON-1MB/strings.Index    	    6302	    378347 ns/op	2771.44 MB/s
+BenchmarkFullComparison/JSON-1MB/IndexFold        	   39952	     60079 ns/op	17453.21 MB/s
+BenchmarkFullComparison/JSON-1MB/SearchNeedle     	   39968	     60014 ns/op	17472.11 MB/s
+PASS

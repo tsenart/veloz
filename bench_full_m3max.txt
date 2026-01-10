@@ -1,0 +1,23 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/mhr3/veloz/ascii
+cpu: Apple M3 Max
+BenchmarkFullComparison/1KB/strings.Index-16         	138147319	        17.24 ns/op	58810.91 MB/s
+BenchmarkFullComparison/1KB/IndexFold-16             	58134018	        39.42 ns/op	25722.12 MB/s
+BenchmarkFullComparison/1KB/SearchNeedle-16          	100000000	        23.38 ns/op	43379.01 MB/s
+BenchmarkFullComparison/64KB/strings.Index-16        	 2996756	       800.2 ns/op	81883.90 MB/s
+BenchmarkFullComparison/64KB/IndexFold-16            	 2426312	       990.5 ns/op	66153.56 MB/s
+BenchmarkFullComparison/64KB/SearchNeedle-16         	 2474838	       973.4 ns/op	67319.89 MB/s
+BenchmarkFullComparison/1MB/strings.Index-16         	  188400	     12737 ns/op	82323.29 MB/s
+BenchmarkFullComparison/1MB/IndexFold-16             	  155028	     15421 ns/op	67995.48 MB/s
+BenchmarkFullComparison/1MB/SearchNeedle-16          	  156296	     15398 ns/op	68099.75 MB/s
+BenchmarkFullComparison/JSON-1KB/strings.Index-16    	 6339846	       377.4 ns/op	2715.93 MB/s
+BenchmarkFullComparison/JSON-1KB/IndexFold-16        	36102213	        67.13 ns/op	15268.02 MB/s
+BenchmarkFullComparison/JSON-1KB/SearchNeedle-16     	44992056	        52.16 ns/op	19650.65 MB/s
+BenchmarkFullComparison/JSON-64KB/strings.Index-16   	  122503	     19601 ns/op	3343.21 MB/s
+BenchmarkFullComparison/JSON-64KB/IndexFold-16       	 1222196	      1971 ns/op	33244.37 MB/s
+BenchmarkFullComparison/JSON-64KB/SearchNeedle-16    	 1225412	      1955 ns/op	33513.66 MB/s
+BenchmarkFullComparison/JSON-1MB/strings.Index-16    	    7669	    312315 ns/op	3357.40 MB/s
+BenchmarkFullComparison/JSON-1MB/IndexFold-16        	   77350	     31121 ns/op	33693.55 MB/s
+BenchmarkFullComparison/JSON-1MB/SearchNeedle-16     	   75385	     30998 ns/op	33826.71 MB/s
+PASS
