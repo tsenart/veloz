@@ -6,6 +6,7 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
+var hasSVE = cpu.ARM64.HasSVE
 var hasSVE2 = cpu.ARM64.HasSVE2
 
 // CharSet represents a precomputed character set for fast IndexAny lookups.
@@ -58,10 +59,7 @@ func IndexAny(data, chars string) int {
 	if len(data) < 16 {
 		return indexAnyGo(data, chars)
 	}
-	// For >32 chars, SVE2 MATCH is faster (no bitset building overhead)
-	if hasSVE2 && len(chars) > 32 && len(chars) <= 64 {
-		return indexAnySve2(data, chars)
-	}
+	// Note: SVE2 MATCH was removed - use NEON bitset for all char set sizes
 	// Build 256-bit bitset from chars
 	var bitset [4]uint64
 	for i := 0; i < len(chars); i++ {
@@ -89,11 +87,10 @@ func SearchNeedle(haystack string, n Needle) int {
 	if len(haystack) < 16 {
 		return indexFoldGo(haystack, n.raw)
 	}
-	// Use SVE2 path on capable CPUs (svmatch is 2 cycles on N2)
-	// Exception: when both rare bytes are the same (e.g., '"' in '"num"'),
-	// NEON's 64-byte batching handles high false-positive density better
-	if hasSVE2 && (n.rare1 != n.rare2 || len(n.raw) >= 8) {
-		return indexFoldNeedleSve2(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+	// Use SVE path on Graviton 3 (256-bit vectors, 2× throughput)
+	// SVE2 was removed - only G3 SVE (non-SVE2) is supported
+	if hasSVE && !hasSVE2 {
+		return indexFoldNeedleSveG3(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
 	}
 	// Frequency-based algorithm selection:
 	// - If rare1 is truly rare (frequency < threshold): use adaptive 1-byte fast path

@@ -29,14 +29,7 @@ func BenchmarkIndexAnyVariants(b *testing.B) {
 			b.SetBytes(int64(size))
 		})
 
-		if hasSVE2 {
-			b.Run(strings.ReplaceAll(b.Name(), "BenchmarkIndexAnyVariants/", "")+"/sve2-"+itoa(size), func(b *testing.B) {
-				for i := 0; i < b.N; i++ {
-					indexAnySve2(data, chars)
-				}
-				b.SetBytes(int64(size))
-			})
-		}
+		// SVE2 indexAny removed - covered by NEON bitset
 	}
 }
 
@@ -96,11 +89,11 @@ func BenchmarkSearchNeedleVariants(b *testing.B) {
 			benchSink = strings.Index(pureScanHaystack, "quartz")
 		}
 	})
-	if hasSVE2 {
-		b.Run("pure-scan-1MB/SVE2", func(b *testing.B) {
+	if hasSVE && !hasSVE2 {
+		b.Run("pure-scan-1MB/SVE-G3", func(b *testing.B) {
 			b.SetBytes(int64(len(pureScanHaystack)))
 			for i := 0; i < b.N; i++ {
-				benchSink = indexFoldNeedleSve2(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
+				benchSink = indexFoldNeedleSveG3(pureScanHaystack, pureScanNeedle.rare1, pureScanNeedle.off1, pureScanNeedle.rare2, pureScanNeedle.off2, pureScanNeedle.norm)
 			}
 		})
 	}
@@ -122,11 +115,11 @@ func BenchmarkSearchNeedleVariants(b *testing.B) {
 			}
 		})
 
-		if hasSVE2 {
-			b.Run(tc.name+"/SVE2", func(b *testing.B) {
+		if hasSVE && !hasSVE2 {
+			b.Run(tc.name+"/SVE-G3", func(b *testing.B) {
 				b.SetBytes(int64(len(tc.haystack)))
 				for i := 0; i < b.N; i++ {
-					benchSink = indexFoldNeedleSve2(tc.haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+					benchSink = indexFoldNeedleSveG3(tc.haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
 				}
 			})
 		}

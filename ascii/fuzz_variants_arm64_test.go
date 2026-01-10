@@ -41,12 +41,7 @@ func FuzzIndexAnyAllVariants(f *testing.F) {
 			}
 		}
 
-		if hasSVE2 && len(chars) <= 64 && len(chars) > 0 {
-			got := indexAnySve2(s, chars)
-			if got != want {
-				t.Fatalf("indexAnySve2(%q, %q) = %d, want %d", s, chars, got, want)
-			}
-		}
+		// SVE2 indexAny removed - covered by NEON bitset
 	})
 }
 
@@ -90,11 +85,11 @@ func FuzzSearchNeedleAllVariants(f *testing.F) {
 			}
 		}
 
-		// Test SVE2 (if available)
-		if hasSVE2 && len(needle) > 0 && len(haystack) >= 16 {
-			got := indexFoldNeedleSve2(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+		// Test SVE-G3 (if available - Graviton 3 with SVE but not SVE2)
+		if hasSVE && !hasSVE2 && len(needle) > 0 && len(haystack) >= 16 {
+			got := indexFoldNeedleSveG3(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
 			if got != want {
-				t.Fatalf("indexFoldNeedleSve2(%q, %q) = %d, want %d", haystack, needle, got, want)
+				t.Fatalf("indexFoldNeedleSveG3(%q, %q) = %d, want %d", haystack, needle, got, want)
 			}
 		}
 	})

@@ -56,11 +56,11 @@ func BenchmarkPureScan(b *testing.B) {
 			}
 		})
 
-		if hasSVE2 {
-			b.Run(s.name+"/SVE2", func(b *testing.B) {
+		if hasSVE && !hasSVE2 {
+			b.Run(s.name+"/SVE-G3", func(b *testing.B) {
 				b.SetBytes(int64(len(haystack)))
 				for i := 0; i < b.N; i++ {
-					benchSink = indexFoldNeedleSve2(haystack, needle.rare1, needle.off1, needle.rare2, needle.off2, needle.norm)
+					benchSink = indexFoldNeedleSveG3(haystack, needle.rare1, needle.off1, needle.rare2, needle.off2, needle.norm)
 				}
 			})
 		}
@@ -187,11 +187,11 @@ func BenchmarkHighFalsePositive(b *testing.B) {
 			}
 		})
 
-		if hasSVE2 {
-			b.Run("JSON-"+s.name+"/SVE2", func(b *testing.B) {
+		if hasSVE && !hasSVE2 {
+			b.Run("JSON-"+s.name+"/SVE-G3", func(b *testing.B) {
 				b.SetBytes(int64(len(jsonHaystack)))
 				for i := 0; i < b.N; i++ {
-					benchSink = indexFoldNeedleSve2(jsonHaystack, jsonNeedle.rare1, jsonNeedle.off1, jsonNeedle.rare2, jsonNeedle.off2, jsonNeedle.norm)
+					benchSink = indexFoldNeedleSveG3(jsonHaystack, jsonNeedle.rare1, jsonNeedle.off1, jsonNeedle.rare2, jsonNeedle.off2, jsonNeedle.norm)
 				}
 			})
 		}

@@ -22,8 +22,8 @@ func allVariants() []testVariant {
 		{"NEON-128B", indexFoldNeedleNeon128},  // 1-byte filtering, 36.5 GB/s pure scan
 		{"Adaptive", indexFoldNeedleAdaptive},  // 1-byte with 2-byte cutover
 	}
-	if hasSVE2 {
-		variants = append(variants, testVariant{"SVE2", indexFoldNeedleSve2})
+	if hasSVE && !hasSVE2 {
+		variants = append(variants, testVariant{"SVE-G3", indexFoldNeedleSveG3})
 	}
 	return variants
 }
