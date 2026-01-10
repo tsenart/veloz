@@ -951,28 +951,40 @@ int64_t index_fold_needle(
     
     int64_t i = 0;
     
-    // Optimization B: 64-byte four-load loop (memchr-style)
-    // Process 64 bytes per iteration to reduce branch overhead and improve ILP
+    // Optimization B: 64-byte four-load loop with Go-style early exit
+    // Key insight from Go stdlib: defer expensive syndrome computation until we know there's a match
+    // Use VORR + vpaddq for fast "any match?" check before computing per-lane masks
     for (; i + 64 <= search_len; i += 64) {
         uint8x16x4_t c1 = vld1q_u8_x4(haystack + i + off1);
         uint8x16x4_t c2 = vld1q_u8_x4(haystack + i + off2);
         
+        // Compute matches for all 4 chunks
+        uint8x16_t eq1_0 = vceqq_u8(vandq_u8(c1.val[0], v_mask1), v_rare1U);
+        uint8x16_t eq2_0 = vceqq_u8(vandq_u8(c2.val[0], v_mask2), v_rare2U);
+        uint8x16_t both0 = vandq_u8(eq1_0, eq2_0);
+        
+        uint8x16_t eq1_1 = vceqq_u8(vandq_u8(c1.val[1], v_mask1), v_rare1U);
+        uint8x16_t eq2_1 = vceqq_u8(vandq_u8(c2.val[1], v_mask2), v_rare2U);
+        uint8x16_t both1 = vandq_u8(eq1_1, eq2_1);
+        
+        uint8x16_t eq1_2 = vceqq_u8(vandq_u8(c1.val[2], v_mask1), v_rare1U);
+        uint8x16_t eq2_2 = vceqq_u8(vandq_u8(c2.val[2], v_mask2), v_rare2U);
+        uint8x16_t both2 = vandq_u8(eq1_2, eq2_2);
+        
+        uint8x16_t eq1_3 = vceqq_u8(vandq_u8(c1.val[3], v_mask1), v_rare1U);
+        uint8x16_t eq2_3 = vceqq_u8(vandq_u8(c2.val[3], v_mask2), v_rare2U);
+        uint8x16_t both3 = vandq_u8(eq1_3, eq2_3);
+        
+        // Go-style fast early exit: OR all results, then use vmaxv to check if any byte is non-zero
+        uint8x16_t any_match = vorrq_u8(vorrq_u8(both0, both1), vorrq_u8(both2, both3));
+        if (vmaxvq_u8(any_match) == 0) continue;  // Fast path: no match in 64 bytes
+        
+        // Slow path: compute individual masks and find position
         uint64_t mask[4];
-        
-        // Unrolled: process each 16-byte lane with branchless case-folding
-        #pragma unroll
-        for (int k = 0; k < 4; k++) {
-            // Branchless: AND with mask (0xDF folds case, 0xFF is no-op), then compare
-            uint8x16_t eq1 = vceqq_u8(vandq_u8(c1.val[k], v_mask1), v_rare1U);
-            uint8x16_t eq2 = vceqq_u8(vandq_u8(c2.val[k], v_mask2), v_rare2U);
-            
-            uint8x16_t both = vandq_u8(eq1, eq2);
-            mask[k] = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both), 4)), 0);
-        }
-        
-        // Early exit: check if any of the 4 masks have matches
-        uint64_t any = mask[0] | mask[1] | mask[2] | mask[3];
-        if (!any) continue;
+        mask[0] = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both0), 4)), 0);
+        mask[1] = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both1), 4)), 0);
+        mask[2] = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both2), 4)), 0);
+        mask[3] = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both3), 4)), 0);
         
         // Find earliest match across the 4 chunks
         for (int k = 0; k < 4; k++) {

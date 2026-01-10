@@ -119,7 +119,7 @@ end128_first64:
 	VAND  V5.B16, V21.B16, V21.B16
 	VAND  V5.B16, V22.B16, V22.B16
 	VAND  V5.B16, V23.B16, V23.B16
-	MOVD  $64, R8                 // block offset within 128-byte load
+	MOVD  $64, R24                // block offset within 128-byte load (use R24 to not conflict with R8)
 	B     check_chunks_0to3
 
 end128_second64:
@@ -133,35 +133,35 @@ end128_second64:
 	VAND  V5.B16, V21.B16, V21.B16
 	VAND  V5.B16, V22.B16, V22.B16
 	VAND  V5.B16, V23.B16, V23.B16
-	MOVD  $0, R8                  // block offset (second 64 is at end)
+	MOVD  $0, R24                 // block offset (second 64 is at end)
 	B     check_chunks_0to3
 
 check_chunks_0to3:
 	// Check chunk 0
 	VADDP V20.B16, V20.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	MOVD  ZR, R14                 // chunk offset = 0
 	CBNZ  R13, try_match128
 
 	// Check chunk 1
 	VADDP V21.B16, V21.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	MOVD  $16, R14
 	CBNZ  R13, try_match128
 
 	// Check chunk 2
 	VADDP V22.B16, V22.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	MOVD  $32, R14
 	CBNZ  R13, try_match128
 
 	// Check chunk 3
 	VADDP V23.B16, V23.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	MOVD  $48, R14
 	CBNZ  R13, try_match128
 
@@ -193,7 +193,7 @@ try_match128:
 	CLZ   R15, R15
 	LSR   $1, R15, R15            // bit position -> byte position
 	ADD   R14, R15, R15           // add chunk offset
-	SUB   R8, R15, R15            // adjust for block offset (0 or 64)
+	SUB   R24, R15, R15           // adjust for block offset (0 or 64), R24 set in end128_first64/second64
 	ADD   $64, R15, R15           // adjust since second load was +64 from first
 
 	// Calculate position in haystack
@@ -224,7 +224,7 @@ clear128:
 	CMP   $64, R14
 	BLT   check_next_chunk128
 	// Exhausted this 64-byte block
-	CBNZ  R8, end128_second64_direct
+	CBNZ  R24, end128_second64_direct
 	B     loop128_continue
 
 check_next_chunk128:
@@ -239,19 +239,19 @@ check_next_chunk128:
 check_chunk1_128:
 	VADDP V21.B16, V21.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	CBNZ  R13, try_match128
 	ADD   $16, R14, R14
 check_chunk2_128:
 	VADDP V22.B16, V22.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	CBNZ  R13, try_match128
 	ADD   $16, R14, R14
 check_chunk3_128:
 	VADDP V23.B16, V23.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	CBNZ  R13, try_match128
 	B     loop128_continue
 
@@ -351,28 +351,28 @@ end64:
 	// Check chunk 0
 	VADDP V20.B16, V20.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	MOVD  ZR, R14                 // chunk offset = 0
 	CBNZ  R13, try_match64
 
 	// Check chunk 1
 	VADDP V21.B16, V21.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	MOVD  $16, R14
 	CBNZ  R13, try_match64
 
 	// Check chunk 2
 	VADDP V22.B16, V22.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	MOVD  $32, R14
 	CBNZ  R13, try_match64
 
 	// Check chunk 3
 	VADDP V23.B16, V23.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	MOVD  $48, R14
 	CBNZ  R13, try_match64
 
@@ -474,19 +474,19 @@ clear64:
 check_chunk1:
 	VADDP V21.B16, V21.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	CBNZ  R13, try_match64
 	ADD   $16, R14, R14
 check_chunk2:
 	VADDP V22.B16, V22.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	CBNZ  R13, try_match64
 	ADD   $16, R14, R14
 check_chunk3:
 	VADDP V23.B16, V23.B16, V26.B16
 	VADDP V26.B16, V26.B16, V26.B16
-	VMOV  V26.D[0], R13
+	VMOV  V26.S[0], R13
 	CBNZ  R13, try_match64
 
 after_chunks64:
@@ -519,13 +519,13 @@ end32:
 
 	VADDP V20.B16, V20.B16, V22.B16
 	VADDP V22.B16, V22.B16, V22.B16
-	VMOV  V22.D[0], R13
+	VMOV  V22.S[0], R13
 	MOVD  ZR, R14
 	CBNZ  R13, try_match32
 
 	VADDP V21.B16, V21.B16, V22.B16
 	VADDP V22.B16, V22.B16, V22.B16
-	VMOV  V22.D[0], R13
+	VMOV  V22.S[0], R13
 	MOVD  $16, R14
 	CBNZ  R13, try_match32
 	B     loop16_entry
@@ -608,7 +608,7 @@ clear32:
 	BNE   loop16_entry
 	VADDP V21.B16, V21.B16, V22.B16
 	VADDP V22.B16, V22.B16, V22.B16
-	VMOV  V22.D[0], R13
+	VMOV  V22.S[0], R13
 	MOVD  $16, R14
 	CBNZ  R13, try_match32
 
@@ -625,7 +625,7 @@ loop16:
 	VAND  V5.B16, V20.B16, V20.B16
 	VADDP V20.B16, V20.B16, V20.B16
 	VADDP V20.B16, V20.B16, V20.B16
-	VMOV  V20.D[0], R13
+	VMOV  V20.S[0], R13
 	CBZ   R13, check16_continue
 
 try16:

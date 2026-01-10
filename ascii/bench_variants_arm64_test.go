@@ -268,6 +268,13 @@ func BenchmarkSearchNeedleVariants(b *testing.B) {
 			}
 		})
 
+		b.Run(tc.name+"/NEON-128B", func(b *testing.B) {
+			b.SetBytes(int64(len(tc.haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = indexFoldNeedleNeon128(tc.haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+			}
+		})
+
 		b.Run(tc.name+"/NEON-Fast", func(b *testing.B) {
 			b.SetBytes(int64(len(tc.haystack)))
 			for i := 0; i < b.N; i++ {
@@ -297,6 +304,36 @@ func BenchmarkSearchNeedleVariants(b *testing.B) {
 				benchSink = SearchNeedle(tc.haystack, n)
 			}
 		})
+	}
+}
+
+func TestNeon64BJSON(t *testing.T) {
+	jsonHaystack := strings.Repeat(`{"key":"value","cnt":123},`, 100) + `{"num":999}`
+	n := MakeNeedle(`"num"`)
+	t.Logf("needle: rare1=%c@%d, rare2=%c@%d, norm=%q", n.rare1, n.off1, n.rare2, n.off2, n.norm)
+	t.Logf("haystack len: %d", len(jsonHaystack))
+	
+	result := indexFoldNeedleNeon64(jsonHaystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+	t.Logf("result: %d", result)
+	
+	expected := strings.Index(strings.ToLower(jsonHaystack), strings.ToLower(`"num"`))
+	if result != expected {
+		t.Errorf("got %d, want %d", result, expected)
+	}
+}
+
+func TestNeon128BJSON(t *testing.T) {
+	jsonHaystack := strings.Repeat(`{"key":"value","cnt":123},`, 100) + `{"num":999}`
+	n := MakeNeedle(`"num"`)
+	t.Logf("needle: rare1=%c@%d, rare2=%c@%d, norm=%q", n.rare1, n.off1, n.rare2, n.off2, n.norm)
+	t.Logf("haystack len: %d", len(jsonHaystack))
+	
+	result := indexFoldNeedleNeon128(jsonHaystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+	t.Logf("result: %d", result)
+	
+	expected := strings.Index(strings.ToLower(jsonHaystack), strings.ToLower(`"num"`))
+	if result != expected {
+		t.Errorf("got %d, want %d", result, expected)
 	}
 }
 
