@@ -860,6 +860,16 @@ setup_rare2_done:
 	VDUP  R21, V2.B16             // V2 = rare2 mask
 	VDUP  R22, V3.B16             // V3 = rare2 target
 
+	// Setup vectorized verification constants (like NEON-64B)
+	// V4 = 159 (-97 as unsigned), V7 = 26, V8 = 32
+	WORD  $0x4f04e7e4             // VMOVI $159, V4.B16 (for case-fold: byte + 159 = byte - 97)
+	WORD  $0x4f00e747             // VMOVI $26, V7.B16
+	WORD  $0x4f01e408             // VMOVI $32, V8.B16
+
+	// Setup tail_mask_table pointer and bit-clear constant
+	MOVD  $tail_mask_table<>(SB), R16  // R16 = tail mask table
+	MOVW  $15, R15                     // R15 = 0xF for clearing syndrome bits
+
 	// Restart search from beginning in 2-byte mode
 	// This is simpler and correct - we only cutover after many failures
 	// so re-scanning a small portion is acceptable
@@ -871,7 +881,11 @@ setup_rare2_done:
 
 // ============================================================================
 // 2-BYTE MODE: Filter on BOTH rare1 AND rare2 (consistent 17 GB/s)
-// R10 points to haystack + off1 + search_offset (we search at off1 position)
+// Optimized to match NEON-64B performance:
+// 1. Load rare1 AND rare2 together upfront (not conditionally)
+// 2. Use SHRN $4 + FMOVD for syndrome extraction (1 vs 3 instructions)
+// 3. Use vectorized XOR+UMAXV for verification (16 bytes/iter vs 1)
+// 4. Use tail_mask_table for remainder handling
 // ============================================================================
 
 loop64_2byte_entry:
@@ -879,11 +893,21 @@ loop64_2byte_entry:
 	BLT   loop16_2byte_entry
 
 loop64_2byte:
-	// Load 64 bytes at off1 position (where R10 points)
-	VLD1.P 64(R10), [V16.B16, V17.B16, V18.B16, V19.B16]
+	// Save position for later (R17 = position in search)
+	SUB   R11, R10, R17
+
+	// Calculate both load positions upfront
+	// R10 points to off1 position, we also need off2 position
+	SUB   R3, R10, R23            // R23 = haystack position (R10 - off1)
+	ADD   R5, R23, R23            // R23 = off2 position (haystack + off2)
+
+	// Load BOTH rare1 and rare2 positions unconditionally (Gap #2 fix)
+	VLD1  (R10), [V16.B16, V17.B16, V18.B16, V19.B16]   // rare1 data
+	VLD1  (R23), [V24.B16, V25.B16, V26.B16, V27.B16]   // rare2 data
+	ADD   $64, R10, R10
 	SUB   $64, R12, R12
 
-	// Check rare1 matches first
+	// Check rare1 matches
 	VAND  V0.B16, V16.B16, V20.B16
 	VAND  V0.B16, V17.B16, V21.B16
 	VAND  V0.B16, V18.B16, V22.B16
@@ -893,22 +917,7 @@ loop64_2byte:
 	VCMEQ V1.B16, V22.B16, V22.B16
 	VCMEQ V1.B16, V23.B16, V23.B16
 
-	// Quick OR to check if any rare1 matches
-	VORR  V20.B16, V21.B16, V6.B16
-	VORR  V22.B16, V23.B16, V7.B16
-	VORR  V6.B16, V7.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
-	CBZ   R13, check64_2byte_continue
-
-	// We have rare1 matches - now load and check rare2 at off2 positions
-	// off2 load position: current_ptr - 64 - off1 + off2
-	SUB   $64, R10, R16           // back to start of this chunk (at off1)
-	SUB   R3, R16, R16            // remove off1 to get haystack position
-	ADD   R5, R16, R16            // add off2 to get off2 position
-	
-	VLD1  (R16), [V24.B16, V25.B16, V26.B16, V27.B16]
-
+	// Check rare2 matches
 	VAND  V2.B16, V24.B16, V28.B16
 	VAND  V2.B16, V25.B16, V29.B16
 	VAND  V2.B16, V26.B16, V30.B16
@@ -924,108 +933,117 @@ loop64_2byte:
 	VAND  V22.B16, V30.B16, V22.B16
 	VAND  V23.B16, V31.B16, V23.B16
 
-	// Extract syndrome
-	VAND  V5.B16, V20.B16, V20.B16
-	VAND  V5.B16, V21.B16, V21.B16
-	VAND  V5.B16, V22.B16, V22.B16
-	VAND  V5.B16, V23.B16, V23.B16
+	// Quick check if any matches (using UMAXV like NEON-64B)
+	VORR  V20.B16, V21.B16, V6.B16
+	VORR  V22.B16, V23.B16, V9.B16
+	VORR  V6.B16, V9.B16, V6.B16
+	WORD  $0x6e30a8c6               // VUMAXV V6.B16, V6
+	FMOVS F6, R13
+	CBZW  R13, check64_2byte_continue
 
-	// Check chunk 0
-	VADDP V20.B16, V20.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
+	// Extract syndromes using SHRN $4 + FMOVD (Gap #1 fix)
+	// This packs 16 match bytes into 8 nibbles in the low 64 bits
+	WORD  $0x0f0c8694               // VSHRN $4, V20.H8, V20.B8
+	FMOVD F20, R13
+	CBNZ  R13, try64_chunk0_2byte
+
+chunk1_syndrome_2byte:
+	WORD  $0x0f0c86b5               // VSHRN $4, V21.H8, V21.B8
+	FMOVD F21, R13
+	CBNZ  R13, try64_chunk1_2byte
+
+chunk2_syndrome_2byte:
+	WORD  $0x0f0c86d6               // VSHRN $4, V22.H8, V22.B8
+	FMOVD F22, R13
+	CBNZ  R13, try64_chunk2_2byte
+
+chunk3_syndrome_2byte:
+	WORD  $0x0f0c86f7               // VSHRN $4, V23.H8, V23.B8
+	FMOVD F23, R13
+	CBNZ  R13, try64_chunk3_2byte
+	B     check64_2byte_continue
+
+try64_chunk0_2byte:
 	MOVD  ZR, R14
-	CBNZ  R13, try64_2byte
-
-	// Check chunk 1
-	VADDP V21.B16, V21.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
+	B     try64_2byte
+try64_chunk1_2byte:
 	MOVD  $16, R14
-	CBNZ  R13, try64_2byte
-
-	// Check chunk 2
-	VADDP V22.B16, V22.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
+	B     try64_2byte
+try64_chunk2_2byte:
 	MOVD  $32, R14
-	CBNZ  R13, try64_2byte
-
-	// Check chunk 3
-	VADDP V23.B16, V23.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
+	B     try64_2byte
+try64_chunk3_2byte:
 	MOVD  $48, R14
-	CBNZ  R13, try64_2byte
-
-check64_2byte_continue:
-	CMP   $64, R12
-	BGE   loop64_2byte
-	B     loop16_2byte_entry
 
 try64_2byte:
-	RBIT  R13, R15
-	CLZ   R15, R15
-	LSR   $1, R15, R15
-	ADD   R14, R15, R15
+	// R13 = syndrome, R14 = chunk offset, R17 = search position
+	RBIT  R13, R19
+	CLZ   R19, R19
+	AND   $60, R19, R20            // R20 = (clz & 0x3c) for clearing - PRESERVED
+	LSR   $2, R19, R19             // R19 = byte offset in chunk
+	ADD   R14, R19, R19            // R19 = byte offset in 64-byte block
 
-	// Position = ptr_after_load - 64 + byte_offset - off1
-	// This gives us the haystack position (start of needle candidate)
-	SUB   $64, R10, R16
-	ADD   R15, R16, R16
-	SUB   R3, R16, R16            // adjust from off1 to start of needle
+	// Position = haystack + search_position + byte_offset
+	// R17 = position relative to R11 (start), R11 = haystack + off1
+	// Haystack position = R11 - off1 + R17 + R19 = R0 + R17 + R19
+	ADD   R17, R0, R8
+	ADD   R19, R8, R8              // R8 = candidate haystack ptr
 
 	// Check bounds
-	SUB   R0, R16, R17            // position in haystack
-	CMP   R9, R17
+	SUB   R0, R8, R23              // position in haystack
+	CMP   R9, R23
 	BGT   clear64_2byte
 
-	MOVD  R16, R8                 // R8 = candidate haystack ptr
-
-	// Verify match
-	MOVBU (R8), R17
-	SUBW  $97, R17, R19
-	CMPW  $26, R19
-	BCS   vnf64a_2
-	ANDW  R24, R17, R17
-vnf64a_2:
-	MOVBU (R6), R19
-	CMPW  R19, R17
-	BNE   clear64_2byte
-
-	ADD   R7, R8, R17
-	SUB   $1, R17
-	MOVBU (R17), R17
-	SUBW  $97, R17, R19
-	CMPW  $26, R19
-	BCS   vnf64b_2
-	ANDW  R24, R17, R17
-vnf64b_2:
-	ADD   R7, R6, R19
-	SUB   $1, R19
-	MOVBU (R19), R19
-	CMPW  R19, R17
-	BNE   clear64_2byte
-
-	MOVD  R8, R17
-	MOVD  R6, R19
-	MOVD  R7, R20
+	// Vectorized verification (Gap #3 fix)
+	// Load haystack candidate and needle, XOR, apply case-folding, check non-zero
+	// Note: R20 must be preserved for syndrome clearing, use R21/R22 for ptrs
+	MOVD  R7, R19                  // R19 = remaining needle length
+	MOVD  R8, R21                  // R21 = haystack candidate ptr
+	MOVD  R6, R22                  // R22 = needle ptr
 
 vloop64_2byte:
-	CBZ   R20, found_2byte
-	MOVBU (R17), R21
-	MOVBU (R19), R22
-	SUBW  $97, R21, R23
-	CMPW  $26, R23
-	BCS   vnf64c_2
-	ANDW  R24, R21, R21
-vnf64c_2:
-	CMPW  R22, R21
-	BNE   clear64_2byte
-	ADD   $1, R17
-	ADD   $1, R19
-	SUB   $1, R20
-	B     vloop64_2byte
+	SUBS  $16, R19, R23            // R23 = remaining - 16
+	BLT   vtail64_2byte
+
+	// Load 16 bytes from haystack and needle
+	VLD1.P 16(R21), [V10.B16]
+	VLD1.P 16(R22), [V11.B16]
+	MOVD   R23, R19
+
+	// Vectorized case-insensitive compare:
+	// 1. XOR haystack with needle to find differences
+	// 2. For letters: add 159 (= -97 unsigned), if < 26, mask with 0x20
+	// 3. XOR result masks out case differences for letters
+	VADD  V4.B16, V10.B16, V12.B16  // V12 = haystack + 159 (= haystack - 97)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = haystack XOR needle (differences)
+	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16 (26 > (h-97)? = is letter?)
+	VAND  V8.B16, V12.B16, V12.B16  // V12 = is_letter ? 0x20 : 0
+	VEOR  V12.B16, V10.B16, V10.B16 // V10 = diff with case masked out
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10 (any non-zero?)
+	FMOVS F10, R23
+	CBZW  R23, vloop64_2byte
+	B     clear64_2byte            // mismatch
+
+vtail64_2byte:
+	// Handle 1-15 remaining bytes using tail_mask_table (Gap #4 fix)
+	CMP   $1, R19
+	BLT   found_2byte              // R19 <= 0 means we matched everything
+
+	// Load with tail mask
+	VLD1  (R21), [V10.B16]
+	VLD1  (R22), [V11.B16]
+	WORD  $0x3cf37a0d               // FMOVQ (R16)(R19<<4), F13  // ldr q13, [x16, x19, lsl #4]
+
+	// Same case-insensitive compare
+	VADD  V4.B16, V10.B16, V12.B16
+	VEOR  V10.B16, V11.B16, V10.B16
+	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16
+	VAND  V8.B16, V12.B16, V12.B16
+	VEOR  V12.B16, V10.B16, V10.B16
+	VAND  V13.B16, V10.B16, V10.B16  // mask out bytes beyond needle
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBNZW R23, clear64_2byte
 
 found_2byte:
 	SUB   R0, R8, R0
@@ -1033,47 +1051,29 @@ found_2byte:
 	RET
 
 clear64_2byte:
-	ADD   $1, R15, R17
-	SUB   R14, R17, R17
-	LSL   $1, R17, R17
-	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	// Clear the bit we just tried and continue
+	LSL   R20, R15, R20            // R20 = 0xF << (clz & 0x3c)
+	BIC   R20, R13, R13
 	CBNZ  R13, try64_2byte
 
+	// Move to next chunk
 	ADD   $16, R14, R14
-	CMP   $64, R14
-	BGE   check64_2byte_continue
 	CMP   $16, R14
-	BEQ   chunk1_64_2byte
+	BEQ   chunk1_syndrome_2byte
 	CMP   $32, R14
-	BEQ   chunk2_64_2byte
+	BEQ   chunk2_syndrome_2byte
 	CMP   $48, R14
-	BEQ   chunk3_64_2byte
+	BEQ   chunk3_syndrome_2byte
+	// R14 >= 64: all chunks exhausted, continue to next 64-byte block
 	B     check64_2byte_continue
 
-chunk1_64_2byte:
-	VADDP V21.B16, V21.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	CBNZ  R13, try64_2byte
-	ADD   $16, R14, R14
-chunk2_64_2byte:
-	VADDP V22.B16, V22.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	CBNZ  R13, try64_2byte
-	ADD   $16, R14, R14
-chunk3_64_2byte:
-	VADDP V23.B16, V23.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	CBNZ  R13, try64_2byte
-	B     check64_2byte_continue
+check64_2byte_continue:
+	CMP   $64, R12
+	BGE   loop64_2byte
+	B     loop16_2byte_entry
 
 // ============================================================================
-// 16-BYTE 2-BYTE PATH
+// 16-BYTE 2-BYTE PATH (optimized with SHRN + vectorized verification)
 // ============================================================================
 
 loop16_2byte_entry:
@@ -1081,100 +1081,103 @@ loop16_2byte_entry:
 	BLT   scalar_2byte_entry
 
 loop16_2byte:
-	VLD1.P 16(R10), [V16.B16]
+	// Save position for later
+	SUB   R11, R10, R17
+
+	// Calculate both load positions
+	SUB   R3, R10, R23            // R23 = haystack position
+	ADD   R5, R23, R23            // R23 = off2 position
+
+	// Load BOTH rare1 and rare2 unconditionally
+	VLD1  (R10), [V16.B16]        // rare1 data
+	VLD1  (R23), [V24.B16]        // rare2 data
+	ADD   $16, R10, R10
 	SUB   $16, R12, R12
 
-	// Check rare1 first (at current position)
+	// Check rare1 matches
 	VAND  V0.B16, V16.B16, V20.B16
 	VCMEQ V1.B16, V20.B16, V20.B16
-	VADDP V20.D2, V20.D2, V20.D2
-	VMOV  V20.D[0], R13
-	CBZ   R13, check16_2byte_continue
 
-	// Load rare2 position: current_ptr - 16 - off1 + off2
-	SUB   $16, R10, R16
-	SUB   R3, R16, R16
-	ADD   R5, R16, R16
-	VLD1  (R16), [V24.B16]
-
+	// Check rare2 matches
 	VAND  V2.B16, V24.B16, V28.B16
 	VCMEQ V3.B16, V28.B16, V28.B16
 
-	// AND and extract syndrome
+	// AND results
 	VAND  V20.B16, V28.B16, V20.B16
-	VAND  V5.B16, V20.B16, V20.B16
-	VADDP V20.B16, V20.B16, V20.B16
-	VADDP V20.B16, V20.B16, V20.B16
-	VMOV  V20.S[0], R13
+
+	// Quick check using UMAXV
+	WORD  $0x6e30aa94               // VUMAXV V20.B16, V20
+	FMOVS F20, R13
+	CBZW  R13, check16_2byte_continue
+
+	// Reload match vector (UMAXV clobbered it) and extract syndrome
+	VAND  V0.B16, V16.B16, V20.B16
+	VCMEQ V1.B16, V20.B16, V20.B16
+	VAND  V20.B16, V28.B16, V20.B16
+	WORD  $0x0f0c8694               // VSHRN $4, V20.H8, V20.B8
+	FMOVD F20, R13
 	CBZ   R13, check16_2byte_continue
 
 try16_2byte:
-	RBIT  R13, R15
-	CLZ   R15, R15
-	LSR   $1, R15, R15
+	RBIT  R13, R19
+	CLZ   R19, R19
+	AND   $60, R19, R20            // R20 = (clz & 0x3c) for clearing
+	LSR   $2, R19, R19             // R19 = byte offset
 
-	// Position = ptr - 16 + byte_offset - off1
-	SUB   $16, R10, R16
-	ADD   R15, R16, R16
-	SUB   R3, R16, R16
+	// Position = haystack + search_position + byte_offset
+	ADD   R17, R0, R8
+	ADD   R19, R8, R8
 
-	SUB   R0, R16, R17
-	CMP   R9, R17
+	// Check bounds
+	SUB   R0, R8, R23
+	CMP   R9, R23
 	BGT   clear16_2byte
 
-	MOVD  R16, R8
-
-	MOVBU (R8), R17
-	SUBW  $97, R17, R19
-	CMPW  $26, R19
-	BCS   vnf16a_2
-	ANDW  R24, R17, R17
-vnf16a_2:
-	MOVBU (R6), R19
-	CMPW  R19, R17
-	BNE   clear16_2byte
-
-	ADD   R7, R8, R17
-	SUB   $1, R17
-	MOVBU (R17), R17
-	SUBW  $97, R17, R19
-	CMPW  $26, R19
-	BCS   vnf16b_2
-	ANDW  R24, R17, R17
-vnf16b_2:
-	ADD   R7, R6, R19
-	SUB   $1, R19
-	MOVBU (R19), R19
-	CMPW  R19, R17
-	BNE   clear16_2byte
-
-	MOVD  R8, R17
-	MOVD  R6, R19
-	MOVD  R7, R20
+	// Vectorized verification (same as 64-byte path)
+	MOVD  R7, R19                  // R19 = remaining needle length
+	MOVD  R8, R21                  // R21 = haystack candidate ptr (use R21, R20 is clz mask)
+	MOVD  R6, R22                  // R22 = needle ptr
 
 vloop16_2byte:
-	CBZ   R20, found_2byte
-	MOVBU (R17), R21
-	MOVBU (R19), R22
-	SUBW  $97, R21, R23
-	CMPW  $26, R23
-	BCS   vnf16c_2
-	ANDW  R24, R21, R21
-vnf16c_2:
-	CMPW  R22, R21
-	BNE   clear16_2byte
-	ADD   $1, R17
-	ADD   $1, R19
-	SUB   $1, R20
-	B     vloop16_2byte
+	SUBS  $16, R19, R23
+	BLT   vtail16_2byte
+
+	VLD1.P 16(R21), [V10.B16]
+	VLD1.P 16(R22), [V11.B16]
+	MOVD   R23, R19
+
+	VADD  V4.B16, V10.B16, V12.B16
+	VEOR  V10.B16, V11.B16, V10.B16
+	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16
+	VAND  V8.B16, V12.B16, V12.B16
+	VEOR  V12.B16, V10.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBZW  R23, vloop16_2byte
+	B     clear16_2byte
+
+vtail16_2byte:
+	CMP   $1, R19
+	BLT   found_2byte
+
+	VLD1  (R21), [V10.B16]
+	VLD1  (R22), [V11.B16]
+	WORD  $0x3cf37a0d               // FMOVQ (R16)(R19<<4), F13
+
+	VADD  V4.B16, V10.B16, V12.B16
+	VEOR  V10.B16, V11.B16, V10.B16
+	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16
+	VAND  V8.B16, V12.B16, V12.B16
+	VEOR  V12.B16, V10.B16, V10.B16
+	VAND  V13.B16, V10.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBNZW R23, clear16_2byte
+	B     found_2byte
 
 clear16_2byte:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
-	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R20, R15, R20
+	BIC   R20, R13, R13
 	CBNZ  R13, try16_2byte
 
 check16_2byte_continue:
@@ -1182,8 +1185,8 @@ check16_2byte_continue:
 	BGE   loop16_2byte
 
 // ============================================================================
-// SCALAR 2-BYTE PATH
-// R10 = current position at off1, R21/R22 = rare2 mask/target
+// SCALAR 2-BYTE PATH (with vectorized verification)
+// R10 = current position at off1
 // ============================================================================
 
 scalar_2byte_entry:
@@ -1198,68 +1201,64 @@ scalar_2byte:
 	BNE   scalar_next_2byte
 
 	// Check rare2 at off2 position: current_ptr - off1 + off2
-	SUB   R3, R10, R16            // remove off1
-	ADD   R5, R16, R16            // add off2
-	MOVBU (R16), R14
-	// Extract rare2 mask/target from V2/V3 (may have been clobbered in verify)
-	VMOV  V2.B[0], R21            // R21 = rare2 mask from V2
-	VMOV  V3.B[0], R22            // R22 = rare2 target from V3
-	ANDW  R21, R14, R14           // R21 = rare2 mask
-	CMPW  R22, R14                // R22 = rare2 target
+	SUB   R3, R10, R17            // R17 = haystack position
+	ADD   R5, R17, R23            // R23 = off2 position
+	MOVBU (R23), R14
+	// Extract rare2 mask/target from V2/V3
+	VMOV  V2.B[0], R21
+	VMOV  V3.B[0], R22
+	ANDW  R21, R14, R14
+	CMPW  R22, R14
 	BNE   scalar_next_2byte
 
-	// Calculate haystack position = current_ptr - off1
-	SUB   R3, R10, R16
-	SUB   R0, R16, R17
-	CMP   R9, R17
+	// Check bounds
+	SUB   R0, R17, R23
+	CMP   R9, R23
 	BGT   scalar_next_2byte
 
-	MOVD  R16, R8
+	MOVD  R17, R8                 // R8 = candidate haystack ptr
 
-	// Verify
-	MOVBU (R8), R17
-	SUBW  $97, R17, R19
-	CMPW  $26, R19
-	BCS   snf1_2
-	ANDW  R24, R17, R17
-snf1_2:
-	MOVBU (R6), R19
-	CMPW  R19, R17
-	BNE   scalar_next_2byte
+	// Vectorized verification
+	MOVD  R7, R19                 // R19 = remaining needle length
+	MOVD  R8, R21                 // R21 = haystack candidate ptr
+	MOVD  R6, R22                 // R22 = needle ptr
 
-	ADD   R7, R8, R17
-	SUB   $1, R17
-	MOVBU (R17), R17
-	SUBW  $97, R17, R19
-	CMPW  $26, R19
-	BCS   snf2_2
-	ANDW  R24, R17, R17
-snf2_2:
-	ADD   R7, R6, R19
-	SUB   $1, R19
-	MOVBU (R19), R19
-	CMPW  R19, R17
-	BNE   scalar_next_2byte
+vloop_scalar_2byte:
+	SUBS  $16, R19, R23
+	BLT   vtail_scalar_2byte
 
-	MOVD  R8, R17
-	MOVD  R6, R19
-	MOVD  R7, R20
+	VLD1.P 16(R21), [V10.B16]
+	VLD1.P 16(R22), [V11.B16]
+	MOVD   R23, R19
 
-sloop_2byte:
-	CBZ   R20, found_2byte
-	MOVBU (R17), R21
-	MOVBU (R19), R22
-	SUBW  $97, R21, R23
-	CMPW  $26, R23
-	BCS   snf3_2
-	ANDW  R24, R21, R21
-snf3_2:
-	CMPW  R22, R21
-	BNE   scalar_next_2byte
-	ADD   $1, R17
-	ADD   $1, R19
-	SUB   $1, R20
-	B     sloop_2byte
+	VADD  V4.B16, V10.B16, V12.B16
+	VEOR  V10.B16, V11.B16, V10.B16
+	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16
+	VAND  V8.B16, V12.B16, V12.B16
+	VEOR  V12.B16, V10.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBZW  R23, vloop_scalar_2byte
+	B     scalar_next_2byte
+
+vtail_scalar_2byte:
+	CMP   $1, R19
+	BLT   found_2byte
+
+	VLD1  (R21), [V10.B16]
+	VLD1  (R22), [V11.B16]
+	WORD  $0x3cf37a0d               // FMOVQ (R16)(R19<<4), F13
+
+	VADD  V4.B16, V10.B16, V12.B16
+	VEOR  V10.B16, V11.B16, V10.B16
+	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16
+	VAND  V8.B16, V12.B16, V12.B16
+	VEOR  V12.B16, V10.B16, V10.B16
+	VAND  V13.B16, V10.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBNZW R23, scalar_next_2byte
+	B     found_2byte
 
 scalar_next_2byte:
 	ADD   $1, R10
@@ -1285,3 +1284,75 @@ found_zero:
 	MOVD  ZR, R0
 	MOVD  R0, ret+64(FP)
 	RET
+
+// ============================================================================
+// TAIL MASK TABLE for vectorized verification
+// Entry N (0-15) has first N bytes as 0xFF, rest as 0x00
+// Used for masking partial vectors in tail processing
+// ============================================================================
+DATA tail_mask_table<>+0x00(SB)/8, $0x0000000000000000
+DATA tail_mask_table<>+0x08(SB)/8, $0x0000000000000000
+DATA tail_mask_table<>+0x10(SB)/1, $0xff
+DATA tail_mask_table<>+0x11(SB)/8, $0x0000000000000000
+DATA tail_mask_table<>+0x19(SB)/4, $0x00000000
+DATA tail_mask_table<>+0x1d(SB)/2, $0x0000
+DATA tail_mask_table<>+0x1f(SB)/1, $0x00
+DATA tail_mask_table<>+0x20(SB)/1, $0xff
+DATA tail_mask_table<>+0x21(SB)/1, $0xff
+DATA tail_mask_table<>+0x22(SB)/8, $0x0000000000000000
+DATA tail_mask_table<>+0x2a(SB)/4, $0x00000000
+DATA tail_mask_table<>+0x2e(SB)/2, $0x0000
+DATA tail_mask_table<>+0x30(SB)/1, $0xff
+DATA tail_mask_table<>+0x31(SB)/1, $0xff
+DATA tail_mask_table<>+0x32(SB)/1, $0xff
+DATA tail_mask_table<>+0x33(SB)/8, $0x0000000000000000
+DATA tail_mask_table<>+0x3b(SB)/4, $0x00000000
+DATA tail_mask_table<>+0x3f(SB)/1, $0x00
+DATA tail_mask_table<>+0x40(SB)/1, $0xff
+DATA tail_mask_table<>+0x41(SB)/1, $0xff
+DATA tail_mask_table<>+0x42(SB)/1, $0xff
+DATA tail_mask_table<>+0x43(SB)/1, $0xff
+DATA tail_mask_table<>+0x44(SB)/8, $0x0000000000000000
+DATA tail_mask_table<>+0x4c(SB)/4, $0x00000000
+DATA tail_mask_table<>+0x50(SB)/1, $0xff
+DATA tail_mask_table<>+0x51(SB)/1, $0xff
+DATA tail_mask_table<>+0x52(SB)/1, $0xff
+DATA tail_mask_table<>+0x53(SB)/1, $0xff
+DATA tail_mask_table<>+0x54(SB)/1, $0xff
+DATA tail_mask_table<>+0x55(SB)/8, $0x0000000000000000
+DATA tail_mask_table<>+0x5d(SB)/2, $0x0000
+DATA tail_mask_table<>+0x5f(SB)/1, $0x00
+DATA tail_mask_table<>+0x60(SB)/1, $0xff
+DATA tail_mask_table<>+0x61(SB)/1, $0xff
+DATA tail_mask_table<>+0x62(SB)/1, $0xff
+DATA tail_mask_table<>+0x63(SB)/1, $0xff
+DATA tail_mask_table<>+0x64(SB)/1, $0xff
+DATA tail_mask_table<>+0x65(SB)/1, $0xff
+DATA tail_mask_table<>+0x66(SB)/8, $0x0000000000000000
+DATA tail_mask_table<>+0x6e(SB)/2, $0x0000
+DATA tail_mask_table<>+0x70(SB)/1, $0xff
+DATA tail_mask_table<>+0x71(SB)/1, $0xff
+DATA tail_mask_table<>+0x72(SB)/1, $0xff
+DATA tail_mask_table<>+0x73(SB)/1, $0xff
+DATA tail_mask_table<>+0x74(SB)/1, $0xff
+DATA tail_mask_table<>+0x75(SB)/1, $0xff
+DATA tail_mask_table<>+0x76(SB)/1, $0xff
+DATA tail_mask_table<>+0x77(SB)/8, $0x0000000000000000
+DATA tail_mask_table<>+0x7f(SB)/1, $0x00
+DATA tail_mask_table<>+0x80(SB)/8, $0xffffffffffffffff
+DATA tail_mask_table<>+0x88(SB)/8, $0x0000000000000000
+DATA tail_mask_table<>+0x90(SB)/8, $0xffffffffffffffff
+DATA tail_mask_table<>+0x98(SB)/8, $0x00000000000000ff
+DATA tail_mask_table<>+0xa0(SB)/8, $0xffffffffffffffff
+DATA tail_mask_table<>+0xa8(SB)/8, $0x000000000000ffff
+DATA tail_mask_table<>+0xb0(SB)/8, $0xffffffffffffffff
+DATA tail_mask_table<>+0xb8(SB)/8, $0x0000000000ffffff
+DATA tail_mask_table<>+0xc0(SB)/8, $0xffffffffffffffff
+DATA tail_mask_table<>+0xc8(SB)/8, $0x00000000ffffffff
+DATA tail_mask_table<>+0xd0(SB)/8, $0xffffffffffffffff
+DATA tail_mask_table<>+0xd8(SB)/8, $0x000000ffffffffff
+DATA tail_mask_table<>+0xe0(SB)/8, $0xffffffffffffffff
+DATA tail_mask_table<>+0xe8(SB)/8, $0x0000ffffffffffff
+DATA tail_mask_table<>+0xf0(SB)/8, $0xffffffffffffffff
+DATA tail_mask_table<>+0xf8(SB)/8, $0x00ffffffffffffff
+GLOBL tail_mask_table<>(SB), (RODATA|NOPTR), $256
