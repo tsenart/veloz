@@ -134,23 +134,68 @@ For repeated case-insensitive searches with the same needle, `SearchNeedle` with
 
 | Scenario | NEON | Go strings.Index | Ratio |
 |----------|-----:|----------------:|------:|
-| Pure scan 1KB (letter needle) | 30.1 GB/s | 35.5 GB/s | 85% |
-| Pure scan 1KB (non-letter needle) | 33.6 GB/s | 35.5 GB/s | 95% |
-| Pure scan 64KB | 40.6 GB/s | 42.5 GB/s | 96% |
-| High false-positive (JSON) | 17.9 GB/s | 2.8 GB/s | **6.4x** |
+| Pure scan 1KB (letter) | 33.6 GB/s | 35.5 GB/s | 95% |
+| Pure scan 64KB (letter) | 40.6 GB/s | 42.5 GB/s | 96% |
+| Pure scan 1MB (letter) | 36.8 GB/s | 40.6 GB/s | 91% |
+| Pure scan 16MB (letter) | 25.2 GB/s | 26.3 GB/s | 96% |
+| Match at end 1KB | 26.0 GB/s | 32.1 GB/s | 81% |
+| Match at end 64KB | 40.5 GB/s | 42.4 GB/s | 95% |
+| Match at end 1MB | 36.2 GB/s | 39.9 GB/s | 91% |
+| High FP JSON 2KB | 14.4 GB/s | 2.5 GB/s | **5.6x** |
+| High FP JSON 64KB | 17.9 GB/s | 2.8 GB/s | **6.4x** |
+| High FP JSON 1MB | 17.4 GB/s | 2.7 GB/s | **6.4x** |
+| Non-letter pure scan 1KB | 34.8 GB/s | 35.6 GB/s | 98% |
+| Non-letter pure scan 64KB | 40.9 GB/s | 42.5 GB/s | 96% |
+| Non-letter pure scan 1MB | 30.9 GB/s | 39.6 GB/s | 78% |
+| Non-letter match end 1KB | 29.7 GB/s | 31.7 GB/s | 94% |
+| Non-letter match end 64KB | 40.9 GB/s | 42.4 GB/s | 96% |
+| Non-letter match end 1MB | 31.0 GB/s | 39.8 GB/s | 78% |
+
+**Throughput (Apple M3 Max, vs case-sensitive strings.Index):**
+
+| Scenario | NEON | Go strings.Index | Ratio |
+|----------|-----:|----------------:|------:|
+| Pure scan 1KB (letter) | 55.3 GB/s | 66.3 GB/s | 83% |
+| Pure scan 64KB (letter) | 67.9 GB/s | 82.7 GB/s | 82% |
+| Pure scan 1MB (letter) | 68.5 GB/s | 83.3 GB/s | 82% |
+| Pure scan 16MB (letter) | 67.2 GB/s | 81.5 GB/s | 82% |
+| Match at end 1KB | 43.4 GB/s | 58.6 GB/s | 74% |
+| Match at end 64KB | 67.6 GB/s | 81.3 GB/s | 83% |
+| Match at end 1MB | 68.4 GB/s | 82.5 GB/s | 83% |
+| High FP JSON 2KB | 26.4 GB/s | 3.0 GB/s | **8.9x** |
+| High FP JSON 64KB | 33.4 GB/s | 3.4 GB/s | **9.9x** |
+| High FP JSON 1MB | 33.7 GB/s | 3.4 GB/s | **10.1x** |
+| Non-letter pure scan 1KB | 75.8 GB/s | 68.9 GB/s | **110%** |
+| Non-letter pure scan 64KB | 96.9 GB/s | 82.6 GB/s | **117%** |
+| Non-letter pure scan 1MB | 89.5 GB/s | 82.8 GB/s | **108%** |
+| Non-letter match end 1KB | 57.9 GB/s | 57.8 GB/s | 100% |
+| Non-letter match end 64KB | 92.9 GB/s | 80.9 GB/s | **115%** |
+| Non-letter match end 1MB | 86.1 GB/s | 80.5 GB/s | **107%** |
+
+**Throughput (Graviton 3, vs case-sensitive strings.Index):**
+
+| Scenario | NEON | Go strings.Index | Ratio |
+|----------|-----:|----------------:|------:|
+| Pure scan 1KB (letter) | 32.1 GB/s | 32.3 GB/s | 99% |
+| Pure scan 64KB (letter) | 33.0 GB/s | 37.5 GB/s | 88% |
+| Pure scan 1MB (letter) | 29.7 GB/s | 32.6 GB/s | 91% |
+| Pure scan 16MB (letter) | 26.8 GB/s | 30.1 GB/s | 89% |
+| Match at end 1KB | 23.4 GB/s | 31.6 GB/s | 74% |
+| Match at end 64KB | 33.0 GB/s | 37.6 GB/s | 88% |
+| Match at end 1MB | 29.6 GB/s | 32.5 GB/s | 91% |
+| High FP JSON 2KB | 12.4 GB/s | 2.3 GB/s | **5.3x** |
+| High FP JSON 64KB | 16.8 GB/s | 2.6 GB/s | **6.5x** |
+| High FP JSON 1MB | 15.1 GB/s | 2.6 GB/s | **5.8x** |
+| Non-letter pure scan 1KB | 37.1 GB/s | 32.3 GB/s | **115%** |
+| Non-letter pure scan 64KB | 43.3 GB/s | 37.5 GB/s | **115%** |
+| Non-letter pure scan 1MB | 34.6 GB/s | 32.8 GB/s | **105%** |
+| Non-letter match end 1KB | 30.0 GB/s | 31.7 GB/s | 95% |
+| Non-letter match end 64KB | 43.1 GB/s | 37.4 GB/s | **115%** |
+| Non-letter match end 1MB | 34.2 GB/s | 32.4 GB/s | **106%** |
 
 The 768B threshold between 32-byte and 128-byte loops was empirically tuned by sweeping thresholds from 512B to 2KB on Graviton 3/4. See [docs/NEON_ADAPTIVE_TECHNIQUES.md](docs/NEON_ADAPTIVE_TECHNIQUES.md#loop-threshold-tuning) for details.
 
-**Throughput (Apple M3 Max):**
-
-| Function     | Needle Type | Throughput (GB/s) | vs IndexFold |
-|--------------|-------------|------------------:|-------------:|
-| IndexFold    | common      |              11.2 |          1.0x |
-| SearchNeedle | common      |              22.8 |          2.0x |
-| IndexFold    | rare bytes  |              11.1 |          1.0x |
-| SearchNeedle | rare bytes  |              19.0 |          1.7x |
-
-*The NEON implementation excels when the haystack has many false-positive candidates (e.g., JSON with many quote characters). In pure scan scenarios, it achieves 85-100% of Go's case-sensitive strings.Index speed while providing case-insensitive matching. Non-letter needles (digits, punctuation) use a VAND-free fast path that matches Go's case-sensitive performance.*
+*The NEON implementation excels when the haystack has many false-positive candidates (e.g., JSON with many quote characters), achieving 5-10x speedups. In pure scan scenarios, it achieves 74-99% of Go's case-sensitive strings.Index speed while providing case-insensitive matching. Non-letter needles (digits, punctuation) use a VAND-free fast path that often exceeds Go's case-sensitive performance (up to 117%).*
 
 #### Needle Reuse Across Many Haystacks
 
