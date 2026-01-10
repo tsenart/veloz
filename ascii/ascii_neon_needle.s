@@ -72,7 +72,12 @@ setup_rare1:
 // - Large inputs (≥2KB): Use 128-byte loop for lower per-byte overhead
 // ============================================================================
 
-	CMP   $2048, R12              // Threshold: 2KB
+	// Check if rare1 is a non-letter (R26==0xFF) - skip VAND for 5-op loop vs 7-op
+	// 0xDF vs 0xFF differ at bit 5; if set, it's non-letter
+	TSTW  $0x20, R26
+	BNE   dispatch_nonletter
+
+	CMP   $768, R12               // Threshold: 768B (tuned for Graviton)
 	BGE   loop128_1byte           // Large input: use 128-byte loop
 	CMP   $32, R12
 	BLT   loop16_1byte_entry
@@ -449,6 +454,10 @@ verify_fail_1byte:
 	CMP   R17, R25
 	BGT   setup_2byte_mode        // Too many failures, switch to 2-byte
 
+	// Check if we're in non-letter mode (R26 == 0xFF, bit 5 set)
+	TSTW  $0x20, R26
+	BNE   verify_fail_nl
+
 	// Continue 1-byte search - check which loop we came from
 	// V4.D[0] != 0 means we were in 128-byte loop (first 64 block)
 	// V4.D[0] == 0 could be 128-byte (second 64) or 32-byte
@@ -457,6 +466,17 @@ verify_fail_1byte:
 	CMP   $64, R14               // If R14 < 64, we were processing 128-byte chunks
 	BLT   clear_128_1byte
 	B     clear32_main
+
+verify_fail_nl:
+	// Non-letter path: dispatch based on R14 encoding
+	// R14 = 0x100: 16-byte/scalar mode
+	// R14 >= 128 (but < 0x100): 32-byte mode (128=chunk0, 144=chunk1)
+	// R14 < 64: 128-byte mode  
+	CMP   $0x100, R14
+	BEQ   clear16_nl
+	CMP   $64, R14
+	BLT   clear_128_nl
+	B     clear32_nl
 
 // ============================================================================
 // 16-BYTE 1-BYTE PATH (for remainder < 32 bytes)
@@ -643,6 +663,400 @@ scalar_next_1byte:
 	ADD   $1, R10
 	SUB   $1, R12
 	CBNZ  R12, scalar_1byte
+	B     not_found
+
+// ============================================================================
+// NON-LETTER FAST PATH: Skip VAND when rare1 is not a letter (mask=0xFF)
+// For non-letters, VAND with 0xFF is a no-op. This gives us a 5-op loop
+// matching Go's case-sensitive search exactly.
+// ============================================================================
+
+dispatch_nonletter:
+	CMP   $768, R12
+	BGE   loop128_nl
+	CMP   $32, R12
+	BLT   loop16_nl_entry
+
+loop32_nl:
+	// 5-op tight loop: VLD1 → SUBS → 2×VCMEQ → VORR → VADDP → VMOV
+	VLD1.P 32(R10), [V16.B16, V17.B16]
+	SUBS  $32, R12, R12
+	
+	// Direct compare (no VAND needed - mask is 0xFF)
+	VCMEQ V1.B16, V16.B16, V20.B16
+	VCMEQ V1.B16, V17.B16, V21.B16
+	
+	// Combine and check
+	VORR  V20.B16, V21.B16, V6.B16
+	VADDP V6.D2, V6.D2, V6.D2
+	VMOV  V6.D[0], R13
+	
+	BLT   end32_nl
+	CBZ   R13, loop32_nl
+
+end32_nl:
+	CBZ   R13, loop16_nl_entry
+	
+	// Extract syndrome for each chunk
+	VAND  V5.B16, V20.B16, V20.B16
+	VAND  V5.B16, V21.B16, V21.B16
+	
+	// Check chunk 0
+	VADDP V20.B16, V20.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $128, R14               // 128 = chunk 0 marker for 32-byte mode
+	CBNZ  R13, try32_nl
+	
+	// Check chunk 1
+	VADDP V21.B16, V21.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $144, R14               // 144 = chunk 1 marker (128+16)
+	CBNZ  R13, try32_nl
+	
+	CMP   $32, R12
+	BGE   loop32_nl
+	B     loop16_nl_entry
+
+try32_nl:
+	RBIT  R13, R15
+	CLZ   R15, R15
+	LSR   $1, R15, R15
+	AND   $0x7F, R14, R17
+	ADD   R17, R15, R15
+	
+	SUB   $32, R10, R16
+	ADD   R15, R16, R16
+	SUB   R11, R16, R16
+	
+	CMP   R9, R16
+	BGT   clear32_nl
+	
+	ADD   R0, R16, R8
+	B     verify_match_1byte      // Reuse letter path verification
+
+clear32_nl:
+	AND   $0x7F, R14, R17
+	ADD   $1, R15, R20
+	SUB   R17, R20, R20
+	LSL   $1, R20, R20
+	MOVD  $1, R19
+	LSL   R20, R19, R20
+	SUB   $1, R20, R20
+	BIC   R20, R13, R13
+	CBNZ  R13, try32_nl
+	
+	CMP   $128, R14
+	BNE   continue32_nl
+	VADDP V21.B16, V21.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $144, R14
+	CBNZ  R13, try32_nl
+
+continue32_nl:
+	CMP   $32, R12
+	BGE   loop32_nl
+	B     loop16_nl_entry
+
+// 128-byte non-letter loop
+loop128_nl:
+	VLD1.P 64(R10), [V16.B16, V17.B16, V18.B16, V19.B16]
+	VLD1.P 64(R10), [V24.B16, V25.B16, V26.B16, V27.B16]
+	SUB   $128, R12, R12
+
+	// Direct compare - no VAND
+	VCMEQ V1.B16, V16.B16, V20.B16
+	VCMEQ V1.B16, V17.B16, V21.B16
+	VCMEQ V1.B16, V18.B16, V22.B16
+	VCMEQ V1.B16, V19.B16, V23.B16
+	VCMEQ V1.B16, V24.B16, V28.B16
+	VCMEQ V1.B16, V25.B16, V29.B16
+	VCMEQ V1.B16, V26.B16, V30.B16
+	VCMEQ V1.B16, V27.B16, V31.B16
+
+	// Combine all 8 chunks
+	VORR  V20.B16, V21.B16, V6.B16
+	VORR  V22.B16, V23.B16, V7.B16
+	VORR  V28.B16, V29.B16, V8.B16
+	VORR  V30.B16, V31.B16, V9.B16
+	VORR  V6.B16, V7.B16, V6.B16
+	VORR  V8.B16, V9.B16, V8.B16
+	VORR  V6.B16, V8.B16, V6.B16
+
+	VADDP V6.D2, V6.D2, V6.D2
+	VMOV  V6.D[0], R13
+	
+	CMP   $128, R12
+	BLT   end128_nl
+	CBZ   R13, loop128_nl
+
+end128_nl:
+	CBZ   R13, loop32_nl
+	
+	// Check first 64 bytes
+	VORR  V20.B16, V21.B16, V6.B16
+	VORR  V22.B16, V23.B16, V7.B16
+	VORR  V6.B16, V7.B16, V6.B16
+	VADDP V6.D2, V6.D2, V6.D2
+	VMOV  V6.D[0], R13
+	CBNZ  R13, end128_first64_nl
+
+	// Check second 64 bytes
+	VORR  V28.B16, V29.B16, V6.B16
+	VORR  V30.B16, V31.B16, V7.B16
+	VORR  V6.B16, V7.B16, V6.B16
+	VADDP V6.D2, V6.D2, V6.D2
+	VMOV  V6.D[0], R13
+	CBNZ  R13, end128_second64_nl
+
+	CMP   $128, R12
+	BGE   loop128_nl
+	B     loop32_nl
+
+end128_first64_nl:
+	VAND  V5.B16, V20.B16, V20.B16
+	VAND  V5.B16, V21.B16, V21.B16
+	VAND  V5.B16, V22.B16, V22.B16
+	VAND  V5.B16, V23.B16, V23.B16
+	MOVD  $64, R17
+	VMOV  R17, V4.D[0]
+	B     check_chunks_nl
+
+end128_second64_nl:
+	VMOV  V28.B16, V20.B16
+	VMOV  V29.B16, V21.B16
+	VMOV  V30.B16, V22.B16
+	VMOV  V31.B16, V23.B16
+	VAND  V5.B16, V20.B16, V20.B16
+	VAND  V5.B16, V21.B16, V21.B16
+	VAND  V5.B16, V22.B16, V22.B16
+	VAND  V5.B16, V23.B16, V23.B16
+	VMOV  ZR, V4.D[0]
+	B     check_chunks_nl
+
+check_chunks_nl:
+	VADDP V20.B16, V20.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  ZR, R14
+	CBNZ  R13, try_match_nl
+
+	VADDP V21.B16, V21.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $16, R14
+	CBNZ  R13, try_match_nl
+
+	VADDP V22.B16, V22.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $32, R14
+	CBNZ  R13, try_match_nl
+
+	VADDP V23.B16, V23.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $48, R14
+	CBNZ  R13, try_match_nl
+
+	VMOV  V4.D[0], R17
+	CBNZ  R17, check_second64_after_first_nl
+	CMP   $128, R12
+	BGE   loop128_nl
+	B     loop32_nl
+
+check_second64_after_first_nl:
+	VORR  V28.B16, V29.B16, V6.B16
+	VORR  V30.B16, V31.B16, V7.B16
+	VORR  V6.B16, V7.B16, V6.B16
+	VADDP V6.D2, V6.D2, V6.D2
+	VMOV  V6.D[0], R13
+	CBZ   R13, continue_128_check_nl
+	B     end128_second64_nl
+
+continue_128_check_nl:
+	CMP   $128, R12
+	BGE   loop128_nl
+	B     loop32_nl
+
+try_match_nl:
+	RBIT  R13, R15
+	CLZ   R15, R15
+	LSR   $1, R15, R15
+	ADD   R14, R15, R15
+	VMOV  V4.D[0], R17
+	SUB   R17, R15, R15
+	ADD   $64, R15, R15
+
+	SUB   $128, R10, R16
+	ADD   R15, R16, R16
+	SUB   R11, R16, R16
+
+	CMP   R9, R16
+	BGT   clear_128_nl
+
+	ADD   R0, R16, R8
+	B     verify_match_1byte
+
+clear_128_nl:
+	ADD   $1, R15, R17
+	SUB   R14, R17, R17
+	LSL   $1, R17, R17
+	MOVD  $1, R19
+	LSL   R17, R19, R17
+	SUB   $1, R17, R17
+	BIC   R17, R13, R13
+	CBNZ  R13, try_match_nl
+
+	ADD   $16, R14, R14
+	CMP   $64, R14
+	BLT   check_next_chunk_nl
+	VMOV  V4.D[0], R17
+	CBNZ  R17, check_second64_after_first_nl
+	B     continue_128_check_nl
+
+check_next_chunk_nl:
+	CMP   $16, R14
+	BEQ   chunk1_nl
+	CMP   $32, R14
+	BEQ   chunk2_nl
+	CMP   $48, R14
+	BEQ   chunk3_nl
+	B     continue_128_check_nl
+
+chunk1_nl:
+	VADDP V21.B16, V21.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	CBNZ  R13, try_match_nl
+	ADD   $16, R14, R14
+chunk2_nl:
+	VADDP V22.B16, V22.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	CBNZ  R13, try_match_nl
+	ADD   $16, R14, R14
+chunk3_nl:
+	VADDP V23.B16, V23.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	CBNZ  R13, try_match_nl
+	VMOV  V4.D[0], R17
+	CBNZ  R17, check_second64_after_first_nl
+	B     continue_128_check_nl
+
+// 16-byte non-letter loop
+loop16_nl_entry:
+	CMP   $16, R12
+	BLT   scalar_nl_entry
+
+loop16_nl:
+	VLD1.P 16(R10), [V16.B16]
+	SUB   $16, R12, R12
+
+	VCMEQ V1.B16, V16.B16, V20.B16
+	VAND  V5.B16, V20.B16, V20.B16
+	VADDP V20.B16, V20.B16, V20.B16
+	VADDP V20.B16, V20.B16, V20.B16
+	VMOV  V20.S[0], R13
+	CBZ   R13, check16_nl_continue
+
+try16_nl:
+	RBIT  R13, R15
+	CLZ   R15, R15
+	LSR   $1, R15, R15
+
+	SUB   $16, R10, R16
+	ADD   R15, R16, R16
+	SUB   R11, R16, R16
+
+	CMP   R9, R16
+	BGT   clear16_nl
+
+	ADD   R0, R16, R8
+	MOVD  $0x100, R14             // Mark as 16-byte non-letter path
+	B     verify_match_1byte
+
+clear16_nl:
+	ADD   $1, R15, R17
+	LSL   $1, R17, R17
+	MOVD  $1, R19
+	LSL   R17, R19, R17
+	SUB   $1, R17, R17
+	BIC   R17, R13, R13
+	CBNZ  R13, try16_nl
+
+check16_nl_continue:
+	CMP   $16, R12
+	BGE   loop16_nl
+
+// Scalar non-letter path
+scalar_nl_entry:
+	CMP   $0, R12
+	BLE   not_found
+
+scalar_nl:
+	MOVBU (R10), R13
+	CMPW  R27, R13                // Direct compare (no mask needed)
+	BNE   scalar_next_nl
+
+	SUB   R11, R10, R16
+	CMP   R9, R16
+	BGT   scalar_next_nl
+
+	ADD   R0, R16, R8
+
+	// Inline verification for scalar non-letter
+	MOVBU (R8), R17
+	SUBW  $97, R17, R19
+	CMPW  $26, R19
+	BCS   snf_nl_1
+	ANDW  R24, R17, R17
+snf_nl_1:
+	MOVBU (R6), R19
+	CMPW  R19, R17
+	BNE   scalar_next_nl
+
+	ADD   R7, R8, R17
+	SUB   $1, R17
+	MOVBU (R17), R17
+	SUBW  $97, R17, R19
+	CMPW  $26, R19
+	BCS   snf_nl_2
+	ANDW  R24, R17, R17
+snf_nl_2:
+	ADD   R7, R6, R19
+	SUB   $1, R19
+	MOVBU (R19), R19
+	CMPW  R19, R17
+	BNE   scalar_next_nl
+
+	MOVD  R8, R17
+	MOVD  R6, R19
+	MOVD  R7, R20
+
+sloop_nl:
+	CBZ   R20, found
+	MOVBU (R17), R21
+	MOVBU (R19), R22
+	SUBW  $97, R21, R23
+	CMPW  $26, R23
+	BCS   snf_nl_3
+	ANDW  R24, R21, R21
+snf_nl_3:
+	CMPW  R22, R21
+	BNE   scalar_next_nl
+	ADD   $1, R17
+	ADD   $1, R19
+	SUB   $1, R20
+	B     sloop_nl
+
+scalar_next_nl:
+	ADD   $1, R10
+	SUB   $1, R12
+	CBNZ  R12, scalar_nl
 	B     not_found
 
 // ============================================================================

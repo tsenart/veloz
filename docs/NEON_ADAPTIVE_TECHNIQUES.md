@@ -1,6 +1,6 @@
 # Complete Guide to ARM64 NEON Adaptive Substring Search
 
-This document explains every technique used in `ascii/ascii_neon_adaptive.s`, a high-performance case-insensitive substring search implementation.
+This document explains every technique used in `ascii/ascii_neon_needle.s`, a high-performance case-insensitive substring search implementation.
 
 ---
 
@@ -489,21 +489,45 @@ CBZW  R23, vloop64_2byte
 
 ## Part 14: The Adaptive Strategy
 
-The key innovation: dynamically switching strategies based on observed performance.
+The implementation has **two levels of adaptivity**:
 
-### 1-Byte Mode (Default)
+1. **Loop Size Adaptivity** (compile-time threshold): Chooses between 32-byte and 128-byte loops based on input size
+2. **Filter Mode Adaptivity** (runtime): Switches from 1-byte to 2-byte filtering based on observed failure rate
+
+Additionally, a **non-letter fast path** skips unnecessary VAND instructions for digit/punctuation needles.
+
+### Level 1: Loop Size Selection
+
+At entry, the code checks the remaining bytes against a threshold:
+
+```asm
+CMP   $768, R12              // Threshold: 768 bytes
+BGE   loop128_1byte          // Large input: use 128-byte loop
+CMP   $32, R12
+BLT   loop16_1byte_entry     // Small input: use 16-byte loop
+                             // Otherwise: use 32-byte loop
+```
+
+- **128-byte loop**: Lower per-byte overhead, better for large inputs (amortizes loop setup cost)
+- **32-byte loop**: Tighter speculation overlap during the VMOV stall, better for small inputs
+
+See [Part 17](#part-17-tiered-loop-structure) for threshold tuning details.
+
+### Level 2: 1-Byte vs 2-Byte Mode
+
+#### 1-Byte Mode (Default)
 
 - Searches for ONE rare byte
 - Very fast filtering
 - But: May have more false positives requiring verification
 
-### 2-Byte Mode (Fallback)
+#### 2-Byte Mode (Fallback)
 
 - Searches for TWO rare bytes simultaneously
 - Slower filtering (loads from two positions)
 - But: Far fewer false positives
 
-### The Cutover Decision (Lines 339-347)
+#### The Cutover Decision
 
 ```asm
 ADD   $1, R25, R25         // R25 = failure_count + 1
@@ -522,6 +546,30 @@ This means:
 - If the failure rate exceeds this, switch to 2-byte mode
 
 The threshold grows as we scan more data, preventing premature switches while catching sustained high failure rates.
+
+### Non-Letter Fast Path
+
+For non-letter rare bytes (digits, punctuation, symbols), the case-fold mask is 0xFF, which means VAND with 0xFF is a no-op. The code detects this at entry and skips the VAND instructions entirely:
+
+```asm
+// After computing R26 (mask): 0xDF for letters, 0xFF for non-letters
+TSTW  $0x20, R26              // bit 5 differs: 0xDF vs 0xFF
+BNE   dispatch_nonletter      // Skip to VAND-free loops
+```
+
+This reduces the inner loop from 7 ops to 5 ops:
+
+**Letter loop (7 ops per 32 bytes):**
+```
+VLD1 → SUBS → VAND → VAND → VCMEQ → VCMEQ → VORR → VADDP → VMOV
+```
+
+**Non-letter loop (5 ops per 32 bytes):**
+```
+VLD1 → SUBS → VCMEQ → VCMEQ → VORR → VADDP → VMOV
+```
+
+Since Go's case-sensitive `strings.Index` uses ~5 ops per iteration, the non-letter path matches Go's theoretical throughput. In practice, non-letter needles achieve **95-118%** of Go's case-sensitive speed across platforms.
 
 ---
 
@@ -553,7 +601,7 @@ The assembler emits these bytes directly into the output.
 
 When fewer than 16 bytes remain, we can't do a full vector load and compare (we'd read garbage or crash on unmapped memory).
 
-Lines 1300-1365 define a lookup table with 16-byte masks:
+The code defines a lookup table with 16-byte masks:
 
 ```asm
 // Entry 0: all zeros (for 0 remaining bytes)
@@ -573,7 +621,7 @@ DATA tail_mask_table<>+0x88(SB)/8, $0x0000000000000000
 
 Each entry is 16 bytes. Entry N has the first N bytes set to 0xFF, rest 0x00.
 
-### Usage (Line 1042)
+### Usage
 
 ```asm
 WORD  $0x3cf37a0d   // LDR Q13, [X16, X19, LSL #4]
@@ -601,8 +649,6 @@ The code has progressively smaller loops for handling different data sizes effic
 ┌─────────────────────────────────────────────────┐
 │  loop128_1byte   (processes 128 bytes/iteration) │
 │       ↓ (when < 128 bytes remain)               │
-│  loop64_1byte    (processes 64 bytes/iteration)  │
-│       ↓ (when < 64 bytes remain)                │
 │  loop32_1byte    (processes 32 bytes/iteration)  │
 │       ↓ (when < 32 bytes remain)                │
 │  loop16_1byte    (processes 16 bytes/iteration)  │
@@ -614,12 +660,40 @@ The code has progressively smaller loops for handling different data sizes effic
 Each tier has an **entry point** that checks if there's enough data:
 
 ```asm
-loop64_1byte_entry:
-    CMP   $64, R12           // Is remaining >= 64?
-    BLT   loop32_1byte_entry // If not, try smaller loop
+loop32_1byte_entry:
+    CMP   $32, R12           // Is remaining >= 32?
+    BLT   loop16_1byte_entry // If not, try smaller loop
 ```
 
 This avoids wasted vector operations on small remainders.
+
+### Loop Threshold Tuning
+
+The threshold between 32-byte and 128-byte loops was empirically tuned for Graviton processors.
+
+**Why two loop sizes?**
+- **128-byte loop**: Lower per-byte overhead, better for large inputs (amortizes loop setup)
+- **32-byte loop**: Tighter speculation overlap during VMOV stall, better for small inputs
+
+**Threshold sweep on Graviton 4** (% of Go's case-sensitive strings.Index):
+
+| Threshold | 768B | 1024B | 1280B | 1536B | 1792B | 2048B |
+|-----------|------|-------|-------|-------|-------|-------|
+| 2KB       | 85%  | 87%   | 84%   | 84%   | 80%   | 84%   |
+| 1.5KB     | 85%  | 87%   | 84%   | 88%   | 94%   | 95%   |
+| 1.25KB    | 85%  | 86%   | 85%   | 94%   | 99%   | 95%   |
+| 1KB       | 84%  | 86%   | 97%   | 97%   | 94%   | 95%   |
+| **768B**  | 86%  | **95%** | **97%** | 94%   | **100%** | 95%   |
+| 512B      | 94%  | 95%   | 95%   | 94%   | 94%   | 95%   |
+
+**Key observations:**
+- At 2KB threshold, the 1792B case was only 80% (worst case)
+- Lowering to 768B achieves 95-100% across the 1-2KB range
+- Going below 768B hurts 1792B performance (128-byte loop overhead)
+
+**Final threshold: 768 bytes** — optimal balance for Graviton 3/4.
+
+Graviton 3 shows similar patterns (1024B at 99% with 768B threshold).
 
 ---
 
@@ -681,10 +755,12 @@ This avoids wasted vector operations on small remainders.
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 
-Key Performance Characteristics:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• 1-byte mode: ~80-90% of case-sensitive strings.Index speed
-• 2-byte mode: ~50% of pure scan speed, but much more consistent
+Key Performance Characteristics (Graviton 4):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• 1-byte mode (letters): 86-100% of case-sensitive strings.Index speed
+• 1-byte mode (non-letters): 95-100% of strings.Index speed  
+• 2-byte mode: ~50% of pure scan speed, but far fewer false positives
+• High false-positive scenarios (JSON): 6x faster than strings.Index
 • Adaptive switch prevents worst-case scenarios on adversarial data
 ```
 

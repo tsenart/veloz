@@ -130,13 +130,16 @@ For repeated case-insensitive searches with the same needle, `SearchNeedle` with
 - **Compare+XOR normalization**: ~4 NEON instructions instead of table lookups for case folding
 - **Tail masking**: No scalar remainder loop - handles tail with SIMD masks
 
-**Throughput (Graviton 3):**
+**Throughput (Graviton 4, vs case-sensitive strings.Index):**
 
-| Scenario | NEON (GB/s) | Go strings.Index (GB/s) | Speedup |
-|----------|------------:|------------------------:|--------:|
-| Pure scan (no match) | 29.4 | 32.5 | 0.9x |
-| Match at end | 29.3 | 32.4 | 0.9x |
-| High false-positive (JSON) | 15.0 | 2.6 | **5.8x** |
+| Scenario | NEON | Go strings.Index | Ratio |
+|----------|-----:|----------------:|------:|
+| Pure scan 1KB (letter needle) | 30.1 GB/s | 35.5 GB/s | 85% |
+| Pure scan 1KB (non-letter needle) | 33.6 GB/s | 35.5 GB/s | 95% |
+| Pure scan 64KB | 40.6 GB/s | 42.5 GB/s | 96% |
+| High false-positive (JSON) | 17.9 GB/s | 2.8 GB/s | **6.4x** |
+
+The 768B threshold between 32-byte and 128-byte loops was empirically tuned by sweeping thresholds from 512B to 2KB on Graviton 3/4. See [docs/NEON_ADAPTIVE_TECHNIQUES.md](docs/NEON_ADAPTIVE_TECHNIQUES.md#loop-threshold-tuning) for details.
 
 **Throughput (Apple M3 Max):**
 
@@ -147,7 +150,7 @@ For repeated case-insensitive searches with the same needle, `SearchNeedle` with
 | IndexFold    | rare bytes  |              11.1 |          1.0x |
 | SearchNeedle | rare bytes  |              19.0 |          1.7x |
 
-*The NEON implementation excels when the haystack has many false-positive candidates (e.g., JSON with many quote characters). In pure scan scenarios, it achieves ~90% of Go's case-sensitive strings.Index speed while providing case-insensitive matching.*
+*The NEON implementation excels when the haystack has many false-positive candidates (e.g., JSON with many quote characters). In pure scan scenarios, it achieves 85-100% of Go's case-sensitive strings.Index speed while providing case-insensitive matching. Non-letter needles (digits, punctuation) use a VAND-free fast path that matches Go's case-sensitive performance.*
 
 #### Needle Reuse Across Many Haystacks
 
