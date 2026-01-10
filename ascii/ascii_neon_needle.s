@@ -66,12 +66,112 @@ setup_rare1:
 	// Initialize failure counter
 	MOVD  ZR, R25                 // R25 = failure count = 0
 
-	// Need at least 128 bytes for main loop
-	CMP   $128, R12
-	BLT   loop64_1byte_entry
+// ============================================================================
+// HYBRID 1-BYTE FAST PATH:
+// - Small inputs (<2KB): Use 32-byte tight loop for better speculation overlap
+// - Large inputs (≥2KB): Use 128-byte loop for lower per-byte overhead
+// ============================================================================
+
+	CMP   $2048, R12              // Threshold: 2KB
+	BGE   loop128_1byte           // Large input: use 128-byte loop
+	CMP   $32, R12
+	BLT   loop16_1byte_entry
+
+loop32_main:
+	// Tight loop matching Go's structure for speculation overlap
+	VLD1.P 32(R10), [V16.B16, V17.B16]
+	SUBS  $32, R12, R12           // Decrement early for better speculation
+	
+	// Case-fold and compare (only 4 vector ops)
+	VAND  V0.B16, V16.B16, V20.B16
+	VAND  V0.B16, V17.B16, V21.B16
+	VCMEQ V1.B16, V20.B16, V20.B16
+	VCMEQ V1.B16, V21.B16, V21.B16
+	
+	// Combine and check (3 ops before VMOV)
+	VORR  V20.B16, V21.B16, V6.B16
+	VADDP V6.D2, V6.D2, V6.D2
+	VMOV  V6.D[0], R13            // Stall point - but loop is tight enough
+	
+	// Branch: continue if no matches and more data
+	BLT   end32_main              // R12 < 0 means we're done with 32-byte chunks
+	CBZ   R13, loop32_main        // No matches, continue tight loop
+
+end32_main:
+	// Either found matches (R13 != 0) or exhausted 32-byte chunks
+	CBZ   R13, loop16_1byte_entry // No matches, fall through to smaller paths
+	
+	// Process matches - extract syndrome for each chunk
+	VAND  V5.B16, V20.B16, V20.B16
+	VAND  V5.B16, V21.B16, V21.B16
+	
+	// Check chunk 0
+	VADDP V20.B16, V20.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $128, R14               // chunk offset = 0, but use 128 to mark 32-byte mode
+	CBNZ  R13, try32_main
+	
+	// Check chunk 1
+	VADDP V21.B16, V21.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $144, R14               // chunk offset = 16, but use 144 (128+16) to mark 32-byte mode
+	CBNZ  R13, try32_main
+	
+	// No matches (shouldn't happen), continue
+	CMP   $32, R12
+	BGE   loop32_main
+	B     loop16_1byte_entry
+
+try32_main:
+	// R13 = syndrome, R14 = chunk offset encoded as 128+offset (128=chunk0, 144=chunk1)
+	RBIT  R13, R15
+	CLZ   R15, R15
+	LSR   $1, R15, R15            // bit position -> byte position
+	AND   $0x7F, R14, R17         // extract actual chunk offset (0 or 16)
+	ADD   R17, R15, R15           // add chunk offset
+	
+	// Calculate position in haystack
+	SUB   $32, R10, R16           // ptr before load (already advanced by 32)
+	ADD   R15, R16, R16           // ptr to match
+	SUB   R11, R16, R16           // offset from searchPtr start
+	
+	CMP   R9, R16
+	BGT   clear32_main
+	
+	// Verify the match
+	ADD   R0, R16, R8             // R8 = &haystack[candidate]
+	B     verify_match_1byte
+
+clear32_main:
+	// Clear this bit and try next
+	AND   $0x7F, R14, R17         // extract actual chunk offset (0 or 16)
+	ADD   $1, R15, R20
+	SUB   R17, R20, R20
+	LSL   $1, R20, R20
+	MOVD  $1, R19
+	LSL   R20, R19, R20
+	SUB   $1, R20, R20
+	BIC   R20, R13, R13
+	CBNZ  R13, try32_main
+	
+	// Move to chunk 1 if we were in chunk 0 (R14 == 128 means chunk 0)
+	CMP   $128, R14
+	BNE   continue32_main
+	VADDP V21.B16, V21.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $144, R14               // 128 + 16 = chunk 1
+	CBNZ  R13, try32_main
+
+continue32_main:
+	CMP   $32, R12
+	BGE   loop32_main
+	B     loop16_1byte_entry
 
 // ============================================================================
-// 1-BYTE FAST PATH: Search for rare1 only (high throughput, may have FPs)
+// 128-BYTE 1-BYTE PATH (for large inputs ≥2KB - lower per-byte overhead)
 // ============================================================================
 
 loop128_1byte:
@@ -119,7 +219,9 @@ loop128_1byte:
 	CBZ   R13, loop128_1byte      // No matches, continue fast path
 
 end128_1byte:
-	// We have potential matches - process each chunk
+	// We have potential matches or exhausted large chunks
+	CBZ   R13, loop32_main        // No matches, fall through to 32-byte loop
+	
 	// Check first 64 bytes
 	VORR  V20.B16, V21.B16, V6.B16
 	VORR  V22.B16, V23.B16, V7.B16
@@ -136,10 +238,10 @@ end128_1byte:
 	VMOV  V6.D[0], R13
 	CBNZ  R13, end128_second64_1byte
 
-	// No matches, try next iteration or fall through
+	// No matches, continue with appropriate loop
 	CMP   $128, R12
 	BGE   loop128_1byte
-	B     loop64_1byte_entry
+	B     loop32_main
 
 end128_first64_1byte:
 	// Process syndrome for first 64 bytes
@@ -198,7 +300,7 @@ check_chunks_1byte:
 	CBNZ  R17, check_second64_after_first
 	CMP   $128, R12
 	BGE   loop128_1byte
-	B     loop64_1byte_entry
+	B     loop32_main
 
 check_second64_after_first:
 	// We were in first 64, now check second 64
@@ -207,13 +309,13 @@ check_second64_after_first:
 	VORR  V6.B16, V7.B16, V6.B16
 	VADDP V6.D2, V6.D2, V6.D2
 	VMOV  V6.D[0], R13
-	CBZ   R13, continue_1byte_check
+	CBZ   R13, continue_128_check
 	B     end128_second64_1byte
 
-continue_1byte_check:
+continue_128_check:
 	CMP   $128, R12
 	BGE   loop128_1byte
-	B     loop64_1byte_entry
+	B     loop32_main
 
 try_match_1byte:
 	// R13 = syndrome, R14 = chunk offset, V4.D[0] = block offset
@@ -231,13 +333,13 @@ try_match_1byte:
 	SUB   R11, R16, R16           // offset from searchPtr start
 
 	CMP   R9, R16
-	BGT   clear_1byte
+	BGT   clear_128_1byte
 
 	// Verify the match
 	ADD   R0, R16, R8             // R8 = &haystack[candidate]
 	B     verify_match_1byte
 
-clear_1byte:
+clear_128_1byte:
 	// Clear this bit and try next
 	ADD   $1, R15, R17
 	SUB   R14, R17, R17
@@ -256,7 +358,7 @@ exhausted_first64_1byte:
 	// Exhausted this block - check if we need second 64 bytes
 	VMOV  V4.D[0], R17
 	CBNZ  R17, check_second64_after_first
-	B     continue_1byte_check
+	B     continue_128_check
 
 check_next_chunk_1byte:
 	CMP   $16, R14
@@ -265,7 +367,7 @@ check_next_chunk_1byte:
 	BEQ   chunk2_1byte
 	CMP   $48, R14
 	BEQ   chunk3_1byte
-	B     continue_1byte_check
+	B     continue_128_check
 
 chunk1_1byte:
 	VADDP V21.B16, V21.B16, V6.B16
@@ -347,318 +449,17 @@ verify_fail_1byte:
 	CMP   R17, R25
 	BGT   setup_2byte_mode        // Too many failures, switch to 2-byte
 
-	// Continue 1-byte search
-	B     clear_1byte
+	// Continue 1-byte search - check which loop we came from
+	// V4.D[0] != 0 means we were in 128-byte loop (first 64 block)
+	// V4.D[0] == 0 could be 128-byte (second 64) or 32-byte
+	// Use R14 >= 0 (chunk offset from 128-byte) vs clear32_main state
+	// Simplest: if R12 + scanned >= 2KB, we were in 128-byte mode
+	CMP   $64, R14               // If R14 < 64, we were processing 128-byte chunks
+	BLT   clear_128_1byte
+	B     clear32_main
 
 // ============================================================================
-// 64-BYTE 1-BYTE PATH (for remainder)
-// ============================================================================
-
-loop64_1byte_entry:
-	CMP   $64, R12
-	BLT   loop32_1byte_entry
-
-loop64_1byte:
-	VLD1.P 64(R10), [V16.B16, V17.B16, V18.B16, V19.B16]
-	SUB   $64, R12, R12
-
-	VAND  V0.B16, V16.B16, V20.B16
-	VAND  V0.B16, V17.B16, V21.B16
-	VAND  V0.B16, V18.B16, V22.B16
-	VAND  V0.B16, V19.B16, V23.B16
-	VCMEQ V1.B16, V20.B16, V20.B16
-	VCMEQ V1.B16, V21.B16, V21.B16
-	VCMEQ V1.B16, V22.B16, V22.B16
-	VCMEQ V1.B16, V23.B16, V23.B16
-
-	VORR  V20.B16, V21.B16, V6.B16
-	VORR  V22.B16, V23.B16, V7.B16
-	VORR  V6.B16, V7.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
-	CBZ   R13, check64_1byte_continue
-
-	// Process matches in 64 bytes
-	VAND  V5.B16, V20.B16, V20.B16
-	VAND  V5.B16, V21.B16, V21.B16
-	VAND  V5.B16, V22.B16, V22.B16
-	VAND  V5.B16, V23.B16, V23.B16
-
-	// Check chunk 0
-	VADDP V20.B16, V20.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	MOVD  ZR, R14
-	CBNZ  R13, try64_1byte
-
-	// Check chunk 1
-	VADDP V21.B16, V21.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	MOVD  $16, R14
-	CBNZ  R13, try64_1byte
-
-	// Check chunk 2
-	VADDP V22.B16, V22.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	MOVD  $32, R14
-	CBNZ  R13, try64_1byte
-
-	// Check chunk 3
-	VADDP V23.B16, V23.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	MOVD  $48, R14
-	CBNZ  R13, try64_1byte
-
-check64_1byte_continue:
-	CMP   $64, R12
-	BGE   loop64_1byte
-	B     loop32_1byte_entry
-
-try64_1byte:
-	RBIT  R13, R15
-	CLZ   R15, R15
-	LSR   $1, R15, R15
-	ADD   R14, R15, R15
-
-	SUB   $64, R10, R16
-	ADD   R15, R16, R16
-	SUB   R11, R16, R16
-
-	CMP   R9, R16
-	BGT   clear64_1byte
-
-	ADD   R0, R16, R8
-
-	// Quick verify
-	MOVBU (R8), R17
-	SUBW  $97, R17, R19
-	CMPW  $26, R19
-	BCS   vnf64a
-	ANDW  R24, R17, R17
-vnf64a:
-	MOVBU (R6), R19
-	CMPW  R19, R17
-	BNE   verify_fail64_1byte
-
-	ADD   R7, R8, R17
-	SUB   $1, R17
-	MOVBU (R17), R17
-	SUBW  $97, R17, R19
-	CMPW  $26, R19
-	BCS   vnf64b
-	ANDW  R24, R17, R17
-vnf64b:
-	ADD   R7, R6, R19
-	SUB   $1, R19
-	MOVBU (R19), R19
-	CMPW  R19, R17
-	BNE   verify_fail64_1byte
-
-	// Full verify
-	MOVD  R8, R17
-	MOVD  R6, R19
-	MOVD  R7, R20
-
-vloop64_1byte:
-	CBZ   R20, found
-	MOVBU (R17), R21
-	MOVBU (R19), R22
-	SUBW  $97, R21, R23
-	CMPW  $26, R23
-	BCS   vnf64c
-	ANDW  R24, R21, R21
-vnf64c:
-	CMPW  R22, R21
-	BNE   verify_fail64_1byte
-	ADD   $1, R17
-	ADD   $1, R19
-	SUB   $1, R20
-	B     vloop64_1byte
-
-verify_fail64_1byte:
-	ADD   $1, R25, R25
-	SUB   R11, R10, R17
-	LSR   $10, R17, R17
-	ADD   $4, R17, R17
-	CMP   R17, R25
-	BGT   setup_2byte_mode
-	B     clear64_1byte
-
-clear64_1byte:
-	ADD   $1, R15, R17
-	SUB   R14, R17, R17
-	LSL   $1, R17, R17
-	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
-	CBNZ  R13, try64_1byte
-
-	// Next chunk
-	ADD   $16, R14, R14
-	CMP   $64, R14
-	BGE   check64_1byte_continue
-	CMP   $16, R14
-	BEQ   chunk1_64_1byte
-	CMP   $32, R14
-	BEQ   chunk2_64_1byte
-	CMP   $48, R14
-	BEQ   chunk3_64_1byte
-	B     check64_1byte_continue
-
-chunk1_64_1byte:
-	VADDP V21.B16, V21.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	CBNZ  R13, try64_1byte
-	ADD   $16, R14, R14
-chunk2_64_1byte:
-	VADDP V22.B16, V22.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	CBNZ  R13, try64_1byte
-	ADD   $16, R14, R14
-chunk3_64_1byte:
-	VADDP V23.B16, V23.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	CBNZ  R13, try64_1byte
-	B     check64_1byte_continue
-
-// ============================================================================
-// 32-BYTE 1-BYTE PATH
-// ============================================================================
-
-loop32_1byte_entry:
-	CMP   $32, R12
-	BLT   loop16_1byte_entry
-
-loop32_1byte:
-	VLD1.P 32(R10), [V16.B16, V17.B16]
-	SUB   $32, R12, R12
-
-	VAND  V0.B16, V16.B16, V20.B16
-	VAND  V0.B16, V17.B16, V21.B16
-	VCMEQ V1.B16, V20.B16, V20.B16
-	VCMEQ V1.B16, V21.B16, V21.B16
-
-	VORR  V20.B16, V21.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
-	CBZ   R13, check32_1byte_continue
-
-	VAND  V5.B16, V20.B16, V20.B16
-	VAND  V5.B16, V21.B16, V21.B16
-
-	VADDP V20.B16, V20.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	MOVD  ZR, R14
-	CBNZ  R13, try32_1byte
-
-	VADDP V21.B16, V21.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	MOVD  $16, R14
-	CBNZ  R13, try32_1byte
-
-check32_1byte_continue:
-	CMP   $32, R12
-	BGE   loop32_1byte
-	B     loop16_1byte_entry
-
-try32_1byte:
-	RBIT  R13, R15
-	CLZ   R15, R15
-	LSR   $1, R15, R15
-	ADD   R14, R15, R15
-
-	SUB   $32, R10, R16
-	ADD   R15, R16, R16
-	SUB   R11, R16, R16
-
-	CMP   R9, R16
-	BGT   clear32_1byte
-
-	ADD   R0, R16, R8
-
-	MOVBU (R8), R17
-	SUBW  $97, R17, R19
-	CMPW  $26, R19
-	BCS   vnf32a_1
-	ANDW  R24, R17, R17
-vnf32a_1:
-	MOVBU (R6), R19
-	CMPW  R19, R17
-	BNE   verify_fail32_1byte
-
-	ADD   R7, R8, R17
-	SUB   $1, R17
-	MOVBU (R17), R17
-	SUBW  $97, R17, R19
-	CMPW  $26, R19
-	BCS   vnf32b_1
-	ANDW  R24, R17, R17
-vnf32b_1:
-	ADD   R7, R6, R19
-	SUB   $1, R19
-	MOVBU (R19), R19
-	CMPW  R19, R17
-	BNE   verify_fail32_1byte
-
-	MOVD  R8, R17
-	MOVD  R6, R19
-	MOVD  R7, R20
-
-vloop32_1byte:
-	CBZ   R20, found
-	MOVBU (R17), R21
-	MOVBU (R19), R22
-	SUBW  $97, R21, R23
-	CMPW  $26, R23
-	BCS   vnf32c_1
-	ANDW  R24, R21, R21
-vnf32c_1:
-	CMPW  R22, R21
-	BNE   verify_fail32_1byte
-	ADD   $1, R17
-	ADD   $1, R19
-	SUB   $1, R20
-	B     vloop32_1byte
-
-verify_fail32_1byte:
-	ADD   $1, R25, R25
-	SUB   R11, R10, R17
-	LSR   $10, R17, R17
-	ADD   $4, R17, R17
-	CMP   R17, R25
-	BGT   setup_2byte_mode
-	B     clear32_1byte
-
-clear32_1byte:
-	ADD   $1, R15, R17
-	SUB   R14, R17, R17
-	LSL   $1, R17, R17
-	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
-	CBNZ  R13, try32_1byte
-
-	CMP   $0, R14
-	BNE   check32_1byte_continue
-	VADDP V21.B16, V21.B16, V6.B16
-	VADDP V6.B16, V6.B16, V6.B16
-	VMOV  V6.S[0], R13
-	MOVD  $16, R14
-	CBNZ  R13, try32_1byte
-	B     check32_1byte_continue
-
-// ============================================================================
-// 16-BYTE 1-BYTE PATH
+// 16-BYTE 1-BYTE PATH (for remainder < 32 bytes)
 // ============================================================================
 
 loop16_1byte_entry:
