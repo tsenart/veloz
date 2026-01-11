@@ -208,13 +208,6 @@ func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 by
 	return toUpper(needle[bestI]), bestI, toUpper(needle[bestJ]), bestJ
 }
 
-func abs(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
 // Needle represents a precomputed needle for fast case-insensitive search.
 // Build once with MakeNeedle, reuse with SearchNeedle.
 type Needle struct {

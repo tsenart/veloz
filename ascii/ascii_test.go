@@ -723,15 +723,6 @@ func BenchmarkIndexAnyCharCounts(b *testing.B) {
 	_ = sink
 }
 
-func buildBitset(chars string) (uint64, uint64, uint64, uint64) {
-	var bitset [4]uint64
-	for i := 0; i < len(chars); i++ {
-		c := chars[i]
-		bitset[c>>6] |= 1 << (c & 63)
-	}
-	return bitset[0], bitset[1], bitset[2], bitset[3]
-}
-
 // indexFoldNaive is a trivially-correct reference for validating indexFoldGo.
 // It performs ASCII-only case folding (bytes >= 0x80 are unchanged).
 func indexFoldNaive(s, substr string) int {
@@ -1477,13 +1468,6 @@ func BenchmarkRankTableUUID(b *testing.B) {
 			static.rare1, static.off1, static.rare2, static.off2,
 			computed.rare1, computed.off1, computed.rare2, computed.off2)
 	}
-}
-
-// makeNeedleWithCorpusRanks creates a Needle using byte frequencies from the actual corpus.
-// This simulates what a database would do: analyze the data once to find truly rare bytes.
-func makeNeedleWithCorpusRanks(needle, corpus string) Needle {
-	ranks := buildRankTable(corpus)
-	return MakeNeedleWithRanks(needle, ranks[:])
 }
 
 // buildRankTable computes a byte frequency rank table from a corpus.
