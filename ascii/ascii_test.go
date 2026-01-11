@@ -444,13 +444,6 @@ func BenchmarkAsciiIndexFold(b *testing.B) {
 				IndexFold(s1, s2)
 			}
 		})
-
-		b.Run(fmt.Sprintf("v2-%d", n), func(b *testing.B) {
-			b.SetBytes(int64(len(s1)))
-			for i := 0; i < b.N; i++ {
-				IndexFoldV2(s1, s2)
-			}
-		})
 	}
 }
 
@@ -469,35 +462,23 @@ func BenchmarkIndexTorture(b *testing.B) {
 			IndexFold(benchInputTorture, benchNeedleTorture)
 		}
 	})
-
-	b.Run("v2", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			IndexFoldV2(benchInputTorture, benchNeedleTorture)
-		}
-	})
 }
 
 func BenchmarkIndexPeriodic(b *testing.B) {
 	key := "aa"
 
 	for _, skip := range [...]int{2, 4, 8, 16, 32, 64} {
-		s := strings.Repeat("a"+strings.Repeat(" ", skip-1), 1<<16/skip)
-
 		b.Run(fmt.Sprintf("go-%d", skip), func(b *testing.B) {
+			s := strings.Repeat("a"+strings.Repeat(" ", skip-1), 1<<16/skip)
 			for i := 0; i < b.N; i++ {
 				strings.Index(s, key)
 			}
 		})
 
 		b.Run(fmt.Sprintf("simd-%d", skip), func(b *testing.B) {
+			s := strings.Repeat("a"+strings.Repeat(" ", skip-1), 1<<16/skip)
 			for i := 0; i < b.N; i++ {
 				IndexFold(s, key)
-			}
-		})
-
-		b.Run(fmt.Sprintf("v2-%d", skip), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				IndexFoldV2(s, key)
 			}
 		})
 	}
@@ -1288,156 +1269,66 @@ func TestMatchAtStart(t *testing.T) {
 }
 
 func BenchmarkSearchNeedle(b *testing.B) {
-	// Consolidated benchmark for case-insensitive search.
-	// Tests multiple scenarios at multiple sizes.
-	sizes := []struct {
-		name string
-		size int
-	}{
-		{"1KB", 1024},
-		{"64KB", 64 * 1024},
-		{"1MB", 1024 * 1024},
-	}
+	// Benchmark full-scan performance with needle at END of haystack.
+	// This measures actual throughput, not "time to first match".
 
-	scenarios := []struct {
-		name        string
-		needle      string
-		makeHay     func(size int, needle string) string
-		description string
-	}{
-		{
-			name:   "rare",
-			needle: "quartz",
-			makeHay: func(size int, needle string) string {
-				// Rare bytes (Q, Z) - minimal false positives
-				return strings.Repeat("abcdefghijklmnoprstuvwy ", size/24) + needle
-			},
-		},
-		{
-			name:   "notfound",
-			needle: "quartz",
-			makeHay: func(size int, _ string) string {
-				// Pure scan - no match
-				return strings.Repeat("abcdefghijklmnoprstuvwy ", size/24)
-			},
-		},
-		{
-			name:   "json",
-			needle: `"num"`,
-			makeHay: func(size int, needle string) string {
-				// JSON-like data - many " characters (high false-positive)
-				return strings.Repeat(`{"key":"value","cnt":123},`, size/26) + `{"num":999}`
-			},
-		},
-	}
+	const size = 4700
 
-	for _, sc := range scenarios {
-		for _, sz := range sizes {
-			haystack := sc.makeHay(sz.size, sc.needle)
-			needle := sc.needle
-			precomputed := MakeNeedle(needle)
+	// JSON case: searching for a key in JSON-like data
+	// Before fix: would pick "@0 and "@4 (same byte) -> many false positives
+	// After fix: picks "@0 and M@3 (different bytes) -> fewer false positives
+	jsonNeedle := `"num"`
+	jsonN := MakeNeedle(jsonNeedle)
+	jsonHaystack := strings.Repeat(`{"key":"value","cnt":123},`, size/26) + `{"num":999}`
 
-			b.Run(fmt.Sprintf("%s/%s/IndexFold", sc.name, sz.name), func(b *testing.B) {
-				b.SetBytes(int64(len(haystack)))
-				for i := 0; i < b.N; i++ {
-					IndexFold(haystack, needle)
-				}
-			})
-
-			b.Run(fmt.Sprintf("%s/%s/IndexFoldV2", sc.name, sz.name), func(b *testing.B) {
-				b.SetBytes(int64(len(haystack)))
-				for i := 0; i < b.N; i++ {
-					IndexFoldV2(haystack, needle)
-				}
-			})
-
-			b.Run(fmt.Sprintf("%s/%s/SearchNeedle", sc.name, sz.name), func(b *testing.B) {
-				b.SetBytes(int64(len(haystack)))
-				for i := 0; i < b.N; i++ {
-					SearchNeedle(haystack, precomputed)
-				}
-			})
+	b.Run("json/IndexFold", func(b *testing.B) {
+		b.SetBytes(int64(len(jsonHaystack)))
+		for i := 0; i < b.N; i++ {
+			IndexFold(jsonHaystack, jsonNeedle)
 		}
-	}
-}
+	})
 
-// BenchmarkSameChar tests worst-case: all same char (forces Rabin-Karp fallback).
-func BenchmarkSameChar(b *testing.B) {
-	sizes := []struct {
-		name string
-		size int
-	}{
-		{"2KB", 2 * 1024},
-		{"64KB", 64 * 1024},
-	}
+	b.Run("json/SearchNeedle", func(b *testing.B) {
+		b.SetBytes(int64(len(jsonHaystack)))
+		for i := 0; i < b.N; i++ {
+			SearchNeedle(jsonHaystack, jsonN)
+		}
+	})
 
-	needleStr := "aab"
-	needle := MakeNeedle(needleStr)
+	// Zero false-positive case: needle "quartz" (Q, Z rare), haystack has no Q or Z
+	zeroFPNeedle := "quartz"
+	zeroFPN := MakeNeedle(zeroFPNeedle)
+	zeroFPHaystack := strings.Repeat("abcdefghijklmnoprstuvwy ", size/24) + zeroFPNeedle
 
-	for _, s := range sizes {
-		haystack := strings.Repeat("a", s.size) + "aab"
+	b.Run("rare/IndexFold", func(b *testing.B) {
+		b.SetBytes(int64(len(zeroFPHaystack)))
+		for i := 0; i < b.N; i++ {
+			IndexFold(zeroFPHaystack, zeroFPNeedle)
+		}
+	})
 
-		b.Run(s.name+"/IndexFold", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				IndexFold(haystack, needleStr)
-			}
-		})
+	b.Run("rare/SearchNeedle", func(b *testing.B) {
+		b.SetBytes(int64(len(zeroFPHaystack)))
+		for i := 0; i < b.N; i++ {
+			SearchNeedle(zeroFPHaystack, zeroFPN)
+		}
+	})
 
-		b.Run(s.name+"/IndexFoldV2", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				IndexFoldV2(haystack, needleStr)
-			}
-		})
+	// Not-found case (full scan)
+	notFoundHaystack := strings.Repeat("abcdefghijklmnoprstuvwy ", size/24)
+	b.Run("notfound/IndexFold", func(b *testing.B) {
+		b.SetBytes(int64(len(notFoundHaystack)))
+		for i := 0; i < b.N; i++ {
+			IndexFold(notFoundHaystack, zeroFPNeedle)
+		}
+	})
 
-		b.Run(s.name+"/SearchNeedle", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				SearchNeedle(haystack, needle)
-			}
-		})
-	}
-}
-
-// BenchmarkNonLetterNeedle tests non-letter rare bytes (digits).
-// This exercises the non-letter path in NEON assembly (exact match, no case-folding).
-func BenchmarkNonLetterNeedle(b *testing.B) {
-	sizes := []struct {
-		name string
-		size int
-	}{
-		{"1KB", 1024},
-		{"64KB", 64 * 1024},
-	}
-
-	needleStr := "12345"
-	needle := MakeNeedle(needleStr)
-
-	for _, s := range sizes {
-		haystack := strings.Repeat("abcdefghijklmnopqrstuvwxyz", s.size/26) + needleStr
-
-		b.Run(s.name+"/IndexFold", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				IndexFold(haystack, needleStr)
-			}
-		})
-
-		b.Run(s.name+"/IndexFoldV2", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				IndexFoldV2(haystack, needleStr)
-			}
-		})
-
-		b.Run(s.name+"/SearchNeedle", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				SearchNeedle(haystack, needle)
-			}
-		})
-	}
+	b.Run("notfound/SearchNeedle", func(b *testing.B) {
+		b.SetBytes(int64(len(notFoundHaystack)))
+		for i := 0; i < b.N; i++ {
+			SearchNeedle(notFoundHaystack, zeroFPN)
+		}
+	})
 }
 
 // BenchmarkNeedleReuse demonstrates the advantage of precomputing Needle once
@@ -1481,23 +1372,24 @@ func BenchmarkNeedleReuse(b *testing.B) {
 			_ = sink
 		})
 
-		b.Run(fmt.Sprintf("IndexFoldV2/%s", suffix), func(b *testing.B) {
-			b.SetBytes(totalBytes)
-			var sink int
-			for i := 0; i < b.N; i++ {
-				for _, h := range haystacks {
-					sink += IndexFoldV2(h, needle)
-				}
-			}
-			_ = sink
-		})
-
 		b.Run(fmt.Sprintf("SearchNeedle/%s", suffix), func(b *testing.B) {
 			b.SetBytes(totalBytes)
 			var sink int
 			for i := 0; i < b.N; i++ {
 				for _, h := range haystacks {
 					sink += SearchNeedle(h, precomputed)
+				}
+			}
+			_ = sink
+		})
+
+		b.Run(fmt.Sprintf("SearchNeedle+MakeNeedle/%s", suffix), func(b *testing.B) {
+			b.SetBytes(totalBytes)
+			var sink int
+			for i := 0; i < b.N; i++ {
+				n := MakeNeedle(needle)
+				for _, h := range haystacks {
+					sink += SearchNeedle(h, n)
 				}
 			}
 			_ = sink
