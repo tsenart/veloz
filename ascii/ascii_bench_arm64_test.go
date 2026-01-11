@@ -200,6 +200,71 @@ func BenchmarkCutoverContinue(b *testing.B) {
 	}
 }
 
+// BenchmarkNEONvsGoDriver compares handwritten NEON assembly vs Go driver + C primitives.
+// This is the key comparison to validate the rewrite maintains performance.
+func BenchmarkNEONvsGoDriver(b *testing.B) {
+	scenarios := []struct {
+		name      string
+		haystack  func(size int) string
+		needleStr string
+	}{
+		{
+			name:      "PureScan",
+			haystack:  func(size int) string { return strings.Repeat("abcdefghijklmnoprstuvwy ", size/24) },
+			needleStr: "quartz",
+		},
+		{
+			name:      "MatchEnd",
+			haystack:  func(size int) string { return strings.Repeat("abcdefghijklmnoprstuvwy ", size/24) + "xylophone" },
+			needleStr: "xylophone",
+		},
+		{
+			name:      "NonLetter",
+			haystack:  func(size int) string { return strings.Repeat("abcdefghijklmnopqrstuvwxyz", size/26) },
+			needleStr: "12345",
+		},
+		{
+			name: "JSON",
+			haystack: func(size int) string {
+				pattern := `{"key":"value","cnt":123},`
+				return strings.Repeat(pattern, size/len(pattern)) + `{"num":999}`
+			},
+			needleStr: `"num"`,
+		},
+		{
+			name: "HighFP",
+			haystack: func(size int) string {
+				return strings.Repeat("h", size) + "hhhhhhhh0"
+			},
+			needleStr: "hhhhhhhh0",
+		},
+	}
+
+	sizes := []int{256, 1024, 4096, 16384, 65536}
+
+	for _, sc := range scenarios {
+		needle := MakeNeedle(sc.needleStr)
+
+		for _, size := range sizes {
+			haystack := sc.haystack(size)
+
+			b.Run(fmt.Sprintf("%s/%dB/NEON", sc.name, size), func(b *testing.B) {
+				b.SetBytes(int64(len(haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = indexFoldNeedleNEON(haystack, needle.rare1, needle.off1, needle.rare2, needle.off2, needle.norm)
+				}
+			})
+
+			b.Run(fmt.Sprintf("%s/%dB/GoDriver", sc.name, size), func(b *testing.B) {
+				b.SetBytes(int64(len(haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = indexFoldNeedleGoDriver(haystack, needle.rare1, needle.off1, needle.rare2, needle.off2, needle.norm)
+				}
+			})
+		}
+	}
+}
+
 // BenchmarkNonLetterNeedle tests non-letter rare bytes (uses faster VAND-free path).
 func BenchmarkNonLetterNeedle(b *testing.B) {
 	sizes := []struct {
