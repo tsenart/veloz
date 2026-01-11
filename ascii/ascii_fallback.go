@@ -127,34 +127,25 @@ var byteRank = [256]byte{
 	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
 }
 
-// toUpper converts ASCII lowercase to uppercase.
-func toUpper(b byte) byte {
-	if b >= 'a' && b <= 'z' {
-		return b - 0x20
+// toLower converts ASCII uppercase to lowercase.
+func toLower(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + 0x20
 	}
 	return b
 }
 
-// normalizeASCII converts a string to uppercase ASCII.
+// normalizeASCII converts a string to lowercase ASCII.
 func normalizeASCII(s string) string {
 	b := make([]byte, len(s))
 	for i := 0; i < len(s); i++ {
-		b[i] = toUpper(s[i])
+		b[i] = toLower(s[i])
 	}
 	return string(b)
 }
 
-// normalizeInto converts s to uppercase ASCII into dst.
-// dst must be at least len(s) bytes.
-func normalizeInto(dst []byte, s string) {
-	_ = dst[len(s)-1] // bounds check hint
-	for i := 0; i < len(s); i++ {
-		dst[i] = toUpper(s[i])
-	}
-}
-
 // selectRarePair finds two rare bytes in O(n) time.
-// Returns the two rarest bytes and their offsets, with off1 < off2.
+// Returns the two rarest bytes (lowercase) and their offsets, with off1 < off2.
 // If ranks is nil, uses the default byteRank table.
 func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 byte, off2 int) {
 	n := len(needle)
@@ -162,7 +153,7 @@ func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 by
 		return 0, 0, 0, 0
 	}
 	if n == 1 {
-		return toUpper(needle[0]), 0, toUpper(needle[0]), 0
+		return toLower(needle[0]), 0, toLower(needle[0]), 0
 	}
 
 	if ranks == nil {
@@ -170,12 +161,17 @@ func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 by
 	}
 
 	// Find the two rarest bytes in a single pass
+	// Use uppercase for rank lookup (byteRank table is tuned for uppercase)
 	best1Rank, best2Rank := byte(255), byte(255)
 	best1Idx, best2Idx := 0, n-1
 
 	for i := 0; i < n; i++ {
-		norm := toUpper(needle[i])
-		rank := ranks[norm]
+		b := needle[i]
+		// Convert to uppercase for rank lookup
+		if b >= 'a' && b <= 'z' {
+			b -= 0x20
+		}
+		rank := ranks[b]
 		if rank < best1Rank {
 			// New rarest - demote current best1 to best2
 			best2Rank, best2Idx = best1Rank, best1Idx
@@ -190,17 +186,17 @@ func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 by
 		best1Idx, best2Idx = best2Idx, best1Idx
 	}
 
-	return toUpper(needle[best1Idx]), best1Idx, toUpper(needle[best2Idx]), best2Idx
+	return toLower(needle[best1Idx]), best1Idx, toLower(needle[best2Idx]), best2Idx
 }
 
 // Needle represents a precomputed needle for fast case-insensitive search.
 // Build once with MakeNeedle, reuse with SearchNeedle.
 type Needle struct {
 	raw   string // original needle
-	norm  string // uppercase needle (for verification)
-	rare1 byte   // first rare byte (normalized)
+	norm  string // lowercase needle (for verification)
+	rare1 byte   // first rare byte (lowercase)
 	off1  int    // offset in needle
-	rare2 byte   // second rare byte (normalized)
+	rare2 byte   // second rare byte (lowercase)
 	off2  int    // offset in needle
 }
 

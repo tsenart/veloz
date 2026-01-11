@@ -34,20 +34,19 @@ TEXT ·indexFoldNeedleNEON(SB), NOSPLIT, $0-72
 	BLT   not_found
 	CBZ   R7, found_zero
 
-	// Pre-load case-fold mask to avoid clobbering R27 (REGTMP)
-	// 0xDF is not a valid ARM64 logical immediate, so ANDW $0xDF uses R27
-	MOVW  $0xDF, R24              // R24 = case-fold mask (used throughout)
-
 	// Compute mask and target for rare1
-	ORRW  $0x20, R2, R10
-	SUBW  $97, R10, R10
+	// With lowercase normalization, rare bytes are already lowercase (a-z).
+	// For letters: OR haystack with 0x20 to force lowercase, compare to lowercase target
+	// For non-letters: mask with 0xFF (exact match)
+	// Using OR 0x20 saves instructions vs AND 0xDF (0x20 is valid immediate, 0xDF is not)
+	SUBW  $97, R2, R10            // R10 = rare1 - 'a'
 	CMPW  $26, R10
 	BCS   not_letter1
-	MOVW  $0xDF, R26              // mask for letter
-	ANDW  R24, R2, R27            // target (uppercase) - use R24 not immediate
+	MOVW  $0x20, R26              // mask = 0x20 (OR to force lowercase)
+	MOVW  R2, R27                 // target = rare1 (already lowercase)
 	B     setup_rare1
 not_letter1:
-	MOVW  $0xFF, R26              // mask = 0xFF (exact match)
+	MOVW  $0x00, R26              // mask = 0x00 (OR with 0 = no change)
 	MOVW  R2, R27                 // target = byte itself
 setup_rare1:
 	VDUP  R26, V0.B16             // V0 = rare1 mask (broadcast)
@@ -72,10 +71,9 @@ setup_rare1:
 // - Large inputs (≥2KB): Use 128-byte loop for lower per-byte overhead
 // ============================================================================
 
-	// Check if rare1 is a non-letter (R26==0xFF) - skip VAND for 5-op loop vs 7-op
-	// 0xDF vs 0xFF differ at bit 5; if set, it's non-letter
-	TSTW  $0x20, R26
-	BNE   dispatch_nonletter
+	// Check if rare1 is a non-letter (R26==0x00) - skip VORR for 5-op loop vs 7-op
+	// Letter: R26=0x20 (OR to lowercase), Non-letter: R26=0x00 (identity)
+	CBZ   R26, dispatch_nonletter
 
 	CMP   $768, R12               // Threshold: 768B (tuned for Graviton)
 	BGE   loop128_1byte           // Large input: use 128-byte loop
@@ -88,8 +86,9 @@ loop32_main:
 	SUBS  $32, R12, R12           // Decrement early for better speculation
 	
 	// Case-fold and compare (only 4 vector ops)
-	VAND  V0.B16, V16.B16, V20.B16
-	VAND  V0.B16, V17.B16, V21.B16
+	// OR with 0x20 forces lowercase for letters
+	VORR  V0.B16, V16.B16, V20.B16
+	VORR  V0.B16, V17.B16, V21.B16
 	VCMEQ V1.B16, V20.B16, V20.B16
 	VCMEQ V1.B16, V21.B16, V21.B16
 	
@@ -186,20 +185,21 @@ loop128_1byte:
 	SUB   $128, R12, R12
 
 	// Process first 64 bytes (chunks 0-3)
-	VAND  V0.B16, V16.B16, V20.B16
-	VAND  V0.B16, V17.B16, V21.B16
-	VAND  V0.B16, V18.B16, V22.B16
-	VAND  V0.B16, V19.B16, V23.B16
+	// OR with 0x20 forces lowercase for letters
+	VORR  V0.B16, V16.B16, V20.B16
+	VORR  V0.B16, V17.B16, V21.B16
+	VORR  V0.B16, V18.B16, V22.B16
+	VORR  V0.B16, V19.B16, V23.B16
 	VCMEQ V1.B16, V20.B16, V20.B16
 	VCMEQ V1.B16, V21.B16, V21.B16
 	VCMEQ V1.B16, V22.B16, V22.B16
 	VCMEQ V1.B16, V23.B16, V23.B16
 
 	// Process second 64 bytes (chunks 4-7)
-	VAND  V0.B16, V24.B16, V28.B16
-	VAND  V0.B16, V25.B16, V29.B16
-	VAND  V0.B16, V26.B16, V30.B16
-	VAND  V0.B16, V27.B16, V31.B16
+	VORR  V0.B16, V24.B16, V28.B16
+	VORR  V0.B16, V25.B16, V29.B16
+	VORR  V0.B16, V26.B16, V30.B16
+	VORR  V0.B16, V27.B16, V31.B16
 	VCMEQ V1.B16, V28.B16, V28.B16
 	VCMEQ V1.B16, V29.B16, V29.B16
 	VCMEQ V1.B16, V30.B16, V30.B16
@@ -395,12 +395,12 @@ chunk3_1byte:
 
 verify_match_1byte:
 	// Quick checks: first and last byte
-	// Needle is pre-normalized to uppercase, only fold haystack
+	// Needle is pre-normalized to lowercase, only fold haystack
 	MOVBU (R8), R17
-	SUBW  $97, R17, R19
+	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
 	CMPW  $26, R19
 	BCS   vnf1a
-	ANDW  R24, R17, R17
+	ORRW  $0x20, R17, R17         // Force lowercase
 vnf1a:
 	MOVBU (R6), R19
 	CMPW  R19, R17
@@ -409,10 +409,10 @@ vnf1a:
 	ADD   R7, R8, R17
 	SUB   $1, R17
 	MOVBU (R17), R17
-	SUBW  $97, R17, R19
+	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
 	CMPW  $26, R19
 	BCS   vnf1b
-	ANDW  R24, R17, R17
+	ORRW  $0x20, R17, R17         // Force lowercase
 vnf1b:
 	ADD   R7, R6, R19
 	SUB   $1, R19
@@ -429,10 +429,10 @@ vloop_1byte:
 	CBZ   R20, found
 	MOVBU (R17), R21
 	MOVBU (R19), R22
-	SUBW  $97, R21, R23
+	SUBW  $65, R21, R23           // Check if uppercase (A-Z)
 	CMPW  $26, R23
 	BCS   vnf1c
-	ANDW  R24, R21, R21
+	ORRW  $0x20, R21, R21         // Force lowercase
 vnf1c:
 	CMPW  R22, R21
 	BNE   verify_fail_1byte
@@ -455,9 +455,8 @@ verify_fail_1byte:
 	CMP   R17, R25
 	BGT   setup_2byte_mode        // Too many failures, switch to 2-byte
 
-	// Check if we're in non-letter mode (R26 == 0xFF, bit 5 set)
-	TSTW  $0x20, R26
-	BNE   verify_fail_nl
+	// Check if we're in non-letter mode (R26 == 0x00)
+	CBZ   R26, verify_fail_nl
 
 	// Continue 1-byte search - check which loop we came from
 	// V4.D[0] != 0 means we were in 128-byte loop (first 64 block)
@@ -491,7 +490,8 @@ loop16_1byte:
 	VLD1.P 16(R10), [V16.B16]
 	SUB   $16, R12, R12
 
-	VAND  V0.B16, V16.B16, V20.B16
+	// OR with 0x20 forces lowercase for letters
+	VORR  V0.B16, V16.B16, V20.B16
 	VCMEQ V1.B16, V20.B16, V20.B16
 	VAND  V5.B16, V20.B16, V20.B16
 	VADDP V20.B16, V20.B16, V20.B16
@@ -514,10 +514,10 @@ try16_1byte:
 	ADD   R0, R16, R8
 
 	MOVBU (R8), R17
-	SUBW  $97, R17, R19
+	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
 	CMPW  $26, R19
 	BCS   vnf16a_1
-	ANDW  R24, R17, R17
+	ORRW  $0x20, R17, R17         // Force lowercase
 vnf16a_1:
 	MOVBU (R6), R19
 	CMPW  R19, R17
@@ -526,10 +526,10 @@ vnf16a_1:
 	ADD   R7, R8, R17
 	SUB   $1, R17
 	MOVBU (R17), R17
-	SUBW  $97, R17, R19
+	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
 	CMPW  $26, R19
 	BCS   vnf16b_1
-	ANDW  R24, R17, R17
+	ORRW  $0x20, R17, R17         // Force lowercase
 vnf16b_1:
 	ADD   R7, R6, R19
 	SUB   $1, R19
@@ -545,10 +545,10 @@ vloop16_1byte:
 	CBZ   R20, found
 	MOVBU (R17), R21
 	MOVBU (R19), R22
-	SUBW  $97, R21, R23
+	SUBW  $65, R21, R23           // Check if uppercase (A-Z)
 	CMPW  $26, R23
 	BCS   vnf16c_1
-	ANDW  R24, R21, R21
+	ORRW  $0x20, R21, R21         // Force lowercase
 vnf16c_1:
 	CMPW  R22, R21
 	BNE   verify_fail16_1byte
@@ -589,7 +589,7 @@ scalar_1byte_entry:
 
 scalar_1byte:
 	MOVBU (R10), R13
-	ANDW  R26, R13, R14
+	ORRW  R26, R13, R14           // OR with 0x20 (or 0x00 for non-letter)
 	CMPW  R27, R14
 	BNE   scalar_next_1byte
 
@@ -600,10 +600,10 @@ scalar_1byte:
 	ADD   R0, R16, R8
 
 	MOVBU (R8), R17
-	SUBW  $97, R17, R19
+	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
 	CMPW  $26, R19
 	BCS   snf1_1
-	ANDW  R24, R17, R17
+	ORRW  $0x20, R17, R17         // Force lowercase
 snf1_1:
 	MOVBU (R6), R19
 	CMPW  R19, R17
@@ -612,10 +612,10 @@ snf1_1:
 	ADD   R7, R8, R17
 	SUB   $1, R17
 	MOVBU (R17), R17
-	SUBW  $97, R17, R19
+	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
 	CMPW  $26, R19
 	BCS   snf2_1
-	ANDW  R24, R17, R17
+	ORRW  $0x20, R17, R17         // Force lowercase
 snf2_1:
 	ADD   R7, R6, R19
 	SUB   $1, R19
@@ -631,10 +631,10 @@ sloop_1byte:
 	CBZ   R20, found
 	MOVBU (R17), R21
 	MOVBU (R19), R22
-	SUBW  $97, R21, R23
+	SUBW  $65, R21, R23           // Check if uppercase (A-Z)
 	CMPW  $26, R23
 	BCS   snf3_1
-	ANDW  R24, R21, R21
+	ORRW  $0x20, R21, R21         // Force lowercase
 snf3_1:
 	CMPW  R22, R21
 	BNE   scalar_fail_1byte
@@ -1002,10 +1002,10 @@ scalar_nl:
 
 	// Inline verification for scalar non-letter
 	MOVBU (R8), R17
-	SUBW  $97, R17, R19
+	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
 	CMPW  $26, R19
 	BCS   snf_nl_1
-	ANDW  R24, R17, R17
+	ORRW  $0x20, R17, R17         // Force lowercase
 snf_nl_1:
 	MOVBU (R6), R19
 	CMPW  R19, R17
@@ -1014,10 +1014,10 @@ snf_nl_1:
 	ADD   R7, R8, R17
 	SUB   $1, R17
 	MOVBU (R17), R17
-	SUBW  $97, R17, R19
+	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
 	CMPW  $26, R19
 	BCS   snf_nl_2
-	ANDW  R24, R17, R17
+	ORRW  $0x20, R17, R17         // Force lowercase
 snf_nl_2:
 	ADD   R7, R6, R19
 	SUB   $1, R19
@@ -1033,10 +1033,10 @@ sloop_nl:
 	CBZ   R20, found
 	MOVBU (R17), R21
 	MOVBU (R19), R22
-	SUBW  $97, R21, R23
+	SUBW  $65, R21, R23           // Check if uppercase (A-Z)
 	CMPW  $26, R23
 	BCS   snf_nl_3
-	ANDW  R24, R21, R21
+	ORRW  $0x20, R21, R21         // Force lowercase
 snf_nl_3:
 	CMPW  R22, R21
 	BNE   scalar_next_nl
@@ -1061,23 +1061,26 @@ setup_2byte_mode:
 	MOVD  off2+40(FP), R5         // R5 = off2
 
 	// Compute mask and target for rare2
-	ORRW  $0x20, R4, R17
-	SUBW  $97, R17, R17
+	// With lowercase normalization, rare bytes are lowercase (a-z)
+	// For letters: OR with 0x20 to force lowercase, compare to lowercase target
+	// For non-letters: OR with 0x00 (identity)
+	SUBW  $97, R4, R17            // R17 = rare2 - 'a'
 	CMPW  $26, R17
 	BCS   not_letter2
-	MOVW  $0xDF, R21              // rare2 mask for letter
-	ANDW  R24, R4, R22            // rare2 target (uppercase) - use R24 not immediate
+	MOVW  $0x20, R21              // rare2 mask = 0x20 (OR to force lowercase)
+	MOVW  R4, R22                 // rare2 target = rare2 (already lowercase)
 	B     setup_rare2_done
 not_letter2:
-	MOVW  $0xFF, R21              // rare2 mask = 0xFF
+	MOVW  $0x00, R21              // rare2 mask = 0x00 (OR with 0 = identity)
 	MOVW  R4, R22                 // rare2 target = byte itself
 setup_rare2_done:
 	VDUP  R21, V2.B16             // V2 = rare2 mask
 	VDUP  R22, V3.B16             // V3 = rare2 target
 
 	// Setup vectorized verification constants (like NEON-64B)
-	// V4 = 159 (-97 as unsigned), V7 = 26, V8 = 32
-	WORD  $0x4f04e7e4             // VMOVI $159, V4.B16 (for case-fold: byte + 159 = byte - 97)
+	// V4 = 191 (-65 as unsigned), V7 = 26, V8 = 32
+	// For lowercase normalization: check if (byte + 191) < 26, i.e., byte is uppercase A-Z
+	WORD  $0x4f05e7e4             // VMOVI $191, V4.B16 (for case-fold: byte + 191 = byte - 65)
 	WORD  $0x4f00e747             // VMOVI $26, V7.B16
 	WORD  $0x4f01e408             // VMOVI $32, V8.B16
 
@@ -1122,21 +1125,21 @@ loop64_2byte:
 	ADD   $64, R10, R10
 	SUB   $64, R12, R12
 
-	// Check rare1 matches
-	VAND  V0.B16, V16.B16, V20.B16
-	VAND  V0.B16, V17.B16, V21.B16
-	VAND  V0.B16, V18.B16, V22.B16
-	VAND  V0.B16, V19.B16, V23.B16
+	// Check rare1 matches (OR with 0x20 forces lowercase for letters)
+	VORR  V0.B16, V16.B16, V20.B16
+	VORR  V0.B16, V17.B16, V21.B16
+	VORR  V0.B16, V18.B16, V22.B16
+	VORR  V0.B16, V19.B16, V23.B16
 	VCMEQ V1.B16, V20.B16, V20.B16
 	VCMEQ V1.B16, V21.B16, V21.B16
 	VCMEQ V1.B16, V22.B16, V22.B16
 	VCMEQ V1.B16, V23.B16, V23.B16
 
-	// Check rare2 matches
-	VAND  V2.B16, V24.B16, V28.B16
-	VAND  V2.B16, V25.B16, V29.B16
-	VAND  V2.B16, V26.B16, V30.B16
-	VAND  V2.B16, V27.B16, V31.B16
+	// Check rare2 matches (OR with 0x20 forces lowercase for letters)
+	VORR  V2.B16, V24.B16, V28.B16
+	VORR  V2.B16, V25.B16, V29.B16
+	VORR  V2.B16, V26.B16, V30.B16
+	VORR  V2.B16, V27.B16, V31.B16
 	VCMEQ V3.B16, V28.B16, V28.B16
 	VCMEQ V3.B16, V29.B16, V29.B16
 	VCMEQ V3.B16, V30.B16, V30.B16
@@ -1309,12 +1312,12 @@ loop16_2byte:
 	ADD   $16, R10, R10
 	SUB   $16, R12, R12
 
-	// Check rare1 matches
-	VAND  V0.B16, V16.B16, V20.B16
+	// Check rare1 matches (OR with 0x20 forces lowercase for letters)
+	VORR  V0.B16, V16.B16, V20.B16
 	VCMEQ V1.B16, V20.B16, V20.B16
 
-	// Check rare2 matches
-	VAND  V2.B16, V24.B16, V28.B16
+	// Check rare2 matches (OR with 0x20 forces lowercase for letters)
+	VORR  V2.B16, V24.B16, V28.B16
 	VCMEQ V3.B16, V28.B16, V28.B16
 
 	// AND results
@@ -1326,7 +1329,7 @@ loop16_2byte:
 	CBZW  R13, check16_2byte_continue
 
 	// Reload match vector (UMAXV clobbered it) and extract syndrome
-	VAND  V0.B16, V16.B16, V20.B16
+	VORR  V0.B16, V16.B16, V20.B16
 	VCMEQ V1.B16, V20.B16, V20.B16
 	VAND  V20.B16, V28.B16, V20.B16
 	WORD  $0x0f0c8694               // VSHRN $4, V20.H8, V20.B8
@@ -1411,7 +1414,7 @@ scalar_2byte_entry:
 scalar_2byte:
 	// Check rare1 at current position (R10 points to off1 position)
 	MOVBU (R10), R13
-	ANDW  R26, R13, R14           // R26 = rare1 mask
+	ORRW  R26, R13, R14           // R26 = rare1 mask (OR with 0x20 or 0x00)
 	CMPW  R27, R14                // R27 = rare1 target
 	BNE   scalar_next_2byte
 
@@ -1422,7 +1425,7 @@ scalar_2byte:
 	// Extract rare2 mask/target from V2/V3
 	VMOV  V2.B[0], R21
 	VMOV  V3.B[0], R22
-	ANDW  R21, R14, R14
+	ORRW  R21, R14, R14           // OR with rare2 mask
 	CMPW  R22, R14
 	BNE   scalar_next_2byte
 
