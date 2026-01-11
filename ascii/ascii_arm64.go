@@ -75,8 +75,9 @@ func IndexFold(haystack, needle string) int {
 	if len(haystack) < 16 {
 		return indexFoldGo(haystack, needle)
 	}
-	// Compute rare bytes and normalized needle inline
+	// O(n) rare byte selection - returns uppercase rare bytes
 	rare1, off1, rare2, off2 := selectRarePair(needle, nil)
+	// Normalize needle once - assembly expects uppercase needle for fast verification
 	norm := normalizeASCII(needle)
 	return indexFoldNeedleNEON(haystack, rare1, off1, rare2, off2, norm)
 }

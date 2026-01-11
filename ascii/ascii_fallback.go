@@ -144,15 +144,17 @@ func normalizeASCII(s string) string {
 	return string(b)
 }
 
-// selectRarePair finds the best byte pair for filtering in the needle.
-// Uses O(n²) evaluation with score = rarity_product × distance_factor.
-//
-// For custom rank tables (MakeNeedleWithRanks): uses uncapped span since the
-// ranks accurately reflect corpus frequencies - trust rarity × distance.
-//
-// For default table (MakeNeedle): caps span at 4 since default English-based
-// ranks may not match the actual corpus - be conservative with distance weight.
-//
+// normalizeInto converts s to uppercase ASCII into dst.
+// dst must be at least len(s) bytes.
+func normalizeInto(dst []byte, s string) {
+	_ = dst[len(s)-1] // bounds check hint
+	for i := 0; i < len(s); i++ {
+		dst[i] = toUpper(s[i])
+	}
+}
+
+// selectRarePair finds two rare bytes in O(n) time.
+// Returns the two rarest bytes and their offsets, with off1 < off2.
 // If ranks is nil, uses the default byteRank table.
 func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 byte, off2 int) {
 	n := len(needle)
@@ -163,49 +165,32 @@ func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 by
 		return toUpper(needle[0]), 0, toUpper(needle[0]), 0
 	}
 
-	// Detect if using custom ranks vs default table
-	customRanks := ranks != nil
 	if ranks == nil {
 		ranks = byteRank[:]
 	}
 
-	// O(n²) evaluation - fine for typical needle lengths (<64 bytes)
-	bestScore := int64(-1)
-	bestI, bestJ := 0, 1
+	// Find the two rarest bytes in a single pass
+	best1Rank, best2Rank := byte(255), byte(255)
+	best1Idx, best2Idx := 0, n-1
 
-	for i := 0; i < n-1; i++ {
-		normI := toUpper(needle[i])
-		wI := 255 - int(ranks[normI])
-
-		for j := i + 1; j < n; j++ {
-			normJ := toUpper(needle[j])
-			wJ := 255 - int(ranks[normJ])
-
-			span := j - i
-
-			// Custom ranks: trust rarity × full span (accurate corpus frequencies)
-			// Default ranks: cap span at 4 (conservative, English table may mismatch)
-			if !customRanks && span > 4 {
-				span = 4
-			}
-
-			// score = rarity_product × (1 + span)
-			rarity := int64(wI) * int64(wJ)
-			score := rarity * int64(1+span)
-
-			// Penalize same-byte pairs
-			if normI == normJ {
-				score /= 4
-			}
-
-			if score > bestScore {
-				bestScore = score
-				bestI, bestJ = i, j
-			}
+	for i := 0; i < n; i++ {
+		norm := toUpper(needle[i])
+		rank := ranks[norm]
+		if rank < best1Rank {
+			// New rarest - demote current best1 to best2
+			best2Rank, best2Idx = best1Rank, best1Idx
+			best1Rank, best1Idx = rank, i
+		} else if rank < best2Rank && i != best1Idx {
+			best2Rank, best2Idx = rank, i
 		}
 	}
 
-	return toUpper(needle[bestI]), bestI, toUpper(needle[bestJ]), bestJ
+	// Ensure off1 < off2
+	if best1Idx > best2Idx {
+		best1Idx, best2Idx = best2Idx, best1Idx
+	}
+
+	return toUpper(needle[best1Idx]), best1Idx, toUpper(needle[best2Idx]), best2Idx
 }
 
 // Needle represents a precomputed needle for fast case-insensitive search.

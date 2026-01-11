@@ -395,6 +395,7 @@ chunk3_1byte:
 
 verify_match_1byte:
 	// Quick checks: first and last byte
+	// Needle is pre-normalized to uppercase, only fold haystack
 	MOVBU (R8), R17
 	SUBW  $97, R17, R19
 	CMPW  $26, R19
@@ -605,15 +606,6 @@ scalar_1byte:
 	ANDW  R24, R17, R17
 snf1_1:
 	MOVBU (R6), R19
-	
-	// DEBUG: return -2000 - (R17 << 8 | R19) to see what we're comparing
-	// MOVD  $-2000, R0
-	// LSL   $8, R17, R17
-	// ORR   R19, R17, R17
-	// SUB   R17, R0, R0
-	// MOVD  R0, ret+64(FP)
-	// RET
-	
 	CMPW  R19, R17
 	BNE   scalar_fail_1byte
 
@@ -1235,7 +1227,7 @@ vloop64_2byte:
 
 	// Vectorized case-insensitive compare:
 	// 1. XOR haystack with needle to find differences
-	// 2. For letters: add 159 (= -97 unsigned), if < 26, mask with 0x20
+	// 2. For lowercase letters: add 159 (= -97 unsigned), if < 26, mask with 0x20
 	// 3. XOR result masks out case differences for letters
 	VADD  V4.B16, V10.B16, V12.B16  // V12 = haystack + 159 (= haystack - 97)
 	VEOR  V10.B16, V11.B16, V10.B16 // V10 = haystack XOR needle (differences)
