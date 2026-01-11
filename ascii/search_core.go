@@ -149,11 +149,10 @@ func selectRarePairFast(needle string) (rare1 byte, off1 int, rare2 byte, off2 i
 	// Clear penalty bit (not needed for result, just suppress warning)
 	_ = secondR
 
-	// Ensure off1 <= off2
-	if minP <= secondP {
-		return minB, minP, secondB, secondP
-	}
-	return secondB, secondP, minB, minP
+	// Ensure off1 <= off2 (branchless)
+	swap := boolToInt(minP > secondP)
+	return selByte(1-swap, minB, secondB), selInt(1-swap, minP, secondP),
+		selByte(1-swap, secondB, minB), selInt(1-swap, secondP, minP)
 }
 
 // Branchless helpers
@@ -249,13 +248,6 @@ func SearchNeedleV2(hay string, nd Needle) int {
 	}
 
 	return searchWithRareBytes(hay, nd.norm, nd.rare1, nd.off1, nd.rare2, nd.off2)
-}
-
-// searchWithRareBytes is the core search driver.
-// It delegates to the NEON kernel which uses a 2-byte prefilter with case-folding.
-func searchWithRareBytes(hay, normNeedle string, rare1 byte, off1 int, rare2 byte, off2 int) int {
-	// Use the handwritten NEON assembly (indexFoldNeedleNEON) which expects lowercase normalized needle
-	return indexFoldNeedleNEON(hay, rare1, off1, rare2, off2, normNeedle)
 }
 
 // toUpperLower returns both case variants of a byte.

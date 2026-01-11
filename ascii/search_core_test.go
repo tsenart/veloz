@@ -58,6 +58,12 @@ func TestIndexFoldV2_MatchesReference(t *testing.T) {
 		{strings.Repeat("a", 10000) + "aab", "aab"},
 		{`{"key":"value","cnt":123},` + strings.Repeat(`{"key":"value","cnt":123},`, 100), `"num"`},
 		{strings.Repeat(`{"key":"value","cnt":123},`, 100) + `{"num":999}`, `"num"`},
+		{strings.Repeat("a", 100) + "aaaa", "aaaa"},
+		{strings.Repeat("A", 100) + "AAAA", "aaaa"},
+		{"xxxaaaaxxx", "aaaa"},
+		{"xxxAAAAxxx", "aaaa"},
+		{"xxx1111xxx", "1111"},
+		{strings.Repeat("z", 50) + "zzzz", "zzzz"},
 	}
 
 	for _, tc := range testCases {
@@ -83,6 +89,12 @@ func TestSelectRarePairFast(t *testing.T) {
 		{`"num"`},
 		{strings.Repeat("a", 100)},
 		{strings.Repeat("x", 50) + "Q" + strings.Repeat("x", 50)},
+		{"aaaa"},
+		{"AAAA"},
+		{"aAaA"},
+		{"zzzz"},
+		{"1111"},
+		{"!!!!"},
 	}
 
 	for _, tt := range tests {
