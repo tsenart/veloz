@@ -560,7 +560,7 @@ vnf16c_1:
 verify_fail16_1byte:
 	ADD   $1, R25, R25
 	SUB   R11, R10, R17
-	LSR   $10, R17, R17
+	LSR   $8, R17, R17             // bytes_scanned >> 8 (1 failure per 256 bytes)
 	ADD   $4, R17, R17
 	CMP   R17, R25
 	BGT   setup_2byte_mode
@@ -646,7 +646,7 @@ snf3_1:
 scalar_fail_1byte:
 	ADD   $1, R25, R25
 	SUB   R11, R10, R17
-	LSR   $10, R17, R17
+	LSR   $8, R17, R17             // bytes_scanned >> 8 (1 failure per 256 bytes)
 	ADD   $4, R17, R17
 	CMP   R17, R25
 	BGT   setup_2byte_mode

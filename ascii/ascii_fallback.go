@@ -144,9 +144,12 @@ func normalizeASCII(s string) string {
 	return string(b)
 }
 
-// selectRarePair finds two rare bytes in O(n) time.
+// selectRarePair finds two rare bytes in O(n) time using a single-pass algorithm.
 // Returns the two rarest bytes (lowercase) and their offsets, with off1 < off2.
-// If ranks is nil, uses the default byteRank table.
+// If ranks is nil, uses the default caseFoldRank table (case-insensitive).
+// Custom ranks are case-folded internally (sum of upper+lower ranks for letters).
+// The function ensures that the two selected bytes are different (normalized)
+// when possible, preferring letters over non-letters.
 func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 byte, off2 int) {
 	n := len(needle)
 	if n == 0 {
@@ -156,37 +159,89 @@ func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 by
 		return toLower(needle[0]), 0, toLower(needle[0]), 0
 	}
 
+	// Build case-folded rank table (uint16 to handle sum of two bytes)
+	var foldedRanks *[256]uint16
 	if ranks == nil {
-		ranks = byteRank[:]
+		foldedRanks = &caseFoldRank
+	} else {
+		// Case-fold custom ranks: for letters, sum upper+lower
+		var customFolded [256]uint16
+		for i := 0; i < 256; i++ {
+			customFolded[i] = uint16(ranks[i])
+		}
+		for b := byte('A'); b <= 'Z'; b++ {
+			lower := b + 0x20
+			sum := uint16(ranks[b]) + uint16(ranks[lower])
+			customFolded[b] = sum
+			customFolded[lower] = sum
+		}
+		foldedRanks = &customFolded
 	}
 
-	// Find the two rarest bytes in a single pass
-	// Use uppercase for rank lookup (byteRank table is tuned for uppercase)
-	best1Rank, best2Rank := byte(255), byte(255)
-	best1Idx, best2Idx := 0, n-1
+	// Single-pass: record first position of each normalized byte
+	// Use n as sentinel (valid positions are 0..n-1)
+	var firstPos [256]int32
+	for i := range firstPos {
+		firstPos[i] = int32(n) // sentinel = not seen
+	}
 
 	for i := 0; i < n; i++ {
-		b := needle[i]
-		// Convert to uppercase for rank lookup
-		if b >= 'a' && b <= 'z' {
-			b -= 0x20
-		}
-		rank := ranks[b]
-		if rank < best1Rank {
-			// New rarest - demote current best1 to best2
-			best2Rank, best2Idx = best1Rank, best1Idx
-			best1Rank, best1Idx = rank, i
-		} else if rank < best2Rank && i != best1Idx {
-			best2Rank, best2Idx = rank, i
+		norm := toLower(needle[i])
+		if firstPos[norm] == int32(n) {
+			firstPos[norm] = int32(i)
 		}
 	}
 
-	// Ensure off1 < off2
-	if best1Idx > best2Idx {
-		best1Idx, best2Idx = best2Idx, best1Idx
+	// Post-process: find two norms with lowest rank
+	// Tie-breaker: prefer letters over non-letters
+	// Letters are 'a'-'z' (norm is already lowercase)
+	best1Norm, best2Norm := byte(0), byte(0)
+	best1Rank, best2Rank := uint16(0xFFFF), uint16(0xFFFF)
+	sentinel := int32(n)
+
+	for norm := 0; norm < 256; norm++ {
+		if firstPos[norm] == sentinel {
+			continue
+		}
+		r := foldedRanks[norm]
+		nb := byte(norm)
+		nbIsLetter := nb >= 'a' && nb <= 'z'
+
+		// Check if better than best1
+		best1IsLetter := best1Norm >= 'a' && best1Norm <= 'z'
+		if r < best1Rank || (r == best1Rank && nbIsLetter && !best1IsLetter) {
+			// Demote old best1 to best2 if it was set
+			if best1Rank != 0xFFFF {
+				best2Norm, best2Rank = best1Norm, best1Rank
+			}
+			best1Norm, best1Rank = nb, r
+			continue
+		}
+
+		// Check if better than best2 (must differ from best1)
+		if nb == best1Norm {
+			continue
+		}
+		best2IsLetter := best2Norm >= 'a' && best2Norm <= 'z'
+		if r < best2Rank || (r == best2Rank && nbIsLetter && !best2IsLetter) {
+			best2Norm, best2Rank = nb, r
+		}
 	}
 
-	return toLower(needle[best1Idx]), best1Idx, toLower(needle[best2Idx]), best2Idx
+	// Handle degenerate case: all bytes same normalized value
+	if best2Rank == 0xFFFF {
+		return toLower(needle[0]), 0, toLower(needle[n-1]), n - 1
+	}
+
+	// Get positions and ensure off1 < off2
+	off1 = int(firstPos[best1Norm])
+	off2 = int(firstPos[best2Norm])
+	if off1 > off2 {
+		off1, off2 = off2, off1
+		best1Norm, best2Norm = best2Norm, best1Norm
+	}
+
+	return best1Norm, off1, best2Norm, off2
 }
 
 // Needle represents a precomputed needle for fast case-insensitive search.
@@ -205,6 +260,26 @@ type Needle struct {
 // This table is not consulted by MakeNeedle; to customize rare-byte selection,
 // copy this table, modify it, and pass to MakeNeedleWithRanks.
 var ByteRank = byteRank
+
+// caseFoldRank is a case-insensitive rank table for rare-byte selection.
+// For letters, rank = rankUpper + rankLower (sum models P(upper OR lower)).
+// For non-letters, rank = original rank.
+// Lower value = rarer = better for filtering.
+var caseFoldRank [256]uint16
+
+func init() {
+	// Initialize with original ranks
+	for b := 0; b < 256; b++ {
+		caseFoldRank[b] = uint16(byteRank[b])
+	}
+	// For letters, use sum of upper+lower ranks (models case-insensitive frequency)
+	for b := byte('A'); b <= 'Z'; b++ {
+		lower := b + 0x20
+		sum := uint16(byteRank[b]) + uint16(byteRank[lower])
+		caseFoldRank[b] = sum
+		caseFoldRank[lower] = sum
+	}
+}
 
 // MakeNeedle precomputes a needle for repeated case-insensitive searches.
 // Uses the default English frequency table for rare-byte selection.

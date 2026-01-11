@@ -962,6 +962,8 @@ func TestSelectRarePair(t *testing.T) {
 		{"zzz", 'Z', 'Z'},         // Z is very rare
 		{"aaa", 'A', 'A'},         // All same
 		{"ab", 'B', 'A'},          // B rarer than A (or vice versa based on distance)
+		{`"num"`, '"', 'u'},       // Must pick different chars, not both quotes
+		{`""`, '"', '"'},          // All same char, fallback to first/last
 	}
 
 	for _, tt := range tests {
@@ -972,6 +974,75 @@ func TestSelectRarePair(t *testing.T) {
 		}
 		t.Logf("selectRarePair(%q) = (%c, %c)", tt.needle, rare1, rare2)
 	}
+}
+
+func FuzzSelectRarePair(f *testing.F) {
+	// Seed corpus
+	f.Add("hello")
+	f.Add(`"num"`)
+	f.Add(`""""`)
+	f.Add("aaaa")
+	f.Add("abcd")
+	f.Add("ABCD")
+	f.Add("AaBbCc")
+	f.Add("x")
+	f.Add("xy")
+	f.Add("")
+	f.Add("the quick brown fox")
+	f.Add(`{"key":"value"}`)
+
+	toLower := func(b byte) byte {
+		if b >= 'A' && b <= 'Z' {
+			return b + 0x20
+		}
+		return b
+	}
+
+	f.Fuzz(func(t *testing.T, needle string) {
+		if len(needle) == 0 {
+			return
+		}
+
+		rare1, off1, rare2, off2 := selectRarePair(needle, nil)
+
+		// Invariant 1: offsets must be in bounds
+		if off1 < 0 || off1 >= len(needle) {
+			t.Fatalf("off1=%d out of bounds for needle len=%d", off1, len(needle))
+		}
+		if off2 < 0 || off2 >= len(needle) {
+			t.Fatalf("off2=%d out of bounds for needle len=%d", off2, len(needle))
+		}
+
+		// Invariant 2: off1 <= off2 (ordered)
+		if off1 > off2 {
+			t.Fatalf("off1=%d > off2=%d, should be ordered", off1, off2)
+		}
+
+		// Invariant 3: returned bytes match needle positions (after toLower)
+		if rare1 != toLower(needle[off1]) {
+			t.Fatalf("rare1=%c doesn't match toLower(needle[%d])=%c", rare1, off1, toLower(needle[off1]))
+		}
+		if rare2 != toLower(needle[off2]) {
+			t.Fatalf("rare2=%c doesn't match toLower(needle[%d])=%c", rare2, off2, toLower(needle[off2]))
+		}
+
+		// Invariant 4: if needle has >1 distinct normalized bytes, rare1 != rare2
+		if len(needle) > 1 {
+			distinctBytes := make(map[byte]struct{})
+			for i := 0; i < len(needle); i++ {
+				distinctBytes[toLower(needle[i])] = struct{}{}
+			}
+			if len(distinctBytes) > 1 && rare1 == rare2 {
+				t.Fatalf("needle %q has %d distinct bytes but rare1==rare2==%c",
+					needle, len(distinctBytes), rare1)
+			}
+		}
+
+		// Invariant 5: for len>1, off1 != off2 (different positions)
+		if len(needle) > 1 && off1 == off2 {
+			t.Fatalf("needle len=%d but off1==off2==%d", len(needle), off1)
+		}
+	})
 }
 
 func TestNeedleLengthVariations(t *testing.T) {
