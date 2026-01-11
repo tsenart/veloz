@@ -1,6 +1,7 @@
 package ascii
 
 import (
+	"math/bits"
 	"unsafe"
 )
 
@@ -823,7 +824,7 @@ func (bs *BooleanSearch) searchTBLGo(haystack string, foundMask uint64) uint64 {
 
 		// Verify each candidate
 		for candidates != 0 {
-			pid := uint8(bits_TrailingZeros8(candidates))
+			pid := uint8(bits.TrailingZeros8(candidates))
 			candidates &^= 1 << pid
 
 			if bs.verifyPattern(haystack, pos, pid) {
@@ -917,7 +918,7 @@ func (bs *BooleanSearch) searchFDRGo(haystack string, foundMask uint64) uint64 {
 
 		// Verify each candidate
 		for candidates != 0 {
-			pid := uint8(bits_TrailingZeros64(candidates))
+			pid := uint8(bits.TrailingZeros64(candidates))
 			candidates &^= 1 << pid
 
 			if bs.verifyPattern(haystack, pos, pid) {
@@ -996,56 +997,4 @@ func (bs *BooleanSearch) verifyPattern(haystack string, pos int, pid uint8) bool
 	}
 
 	return true
-}
-
-// bits_TrailingZeros8 returns the number of trailing zero bits in x.
-func bits_TrailingZeros8(x uint8) int {
-	if x == 0 {
-		return 8
-	}
-	n := 0
-	if x&0x0F == 0 {
-		n += 4
-		x >>= 4
-	}
-	if x&0x03 == 0 {
-		n += 2
-		x >>= 2
-	}
-	if x&0x01 == 0 {
-		n += 1
-	}
-	return n
-}
-
-// bits_TrailingZeros64 returns the number of trailing zero bits in x.
-func bits_TrailingZeros64(x uint64) int {
-	if x == 0 {
-		return 64
-	}
-	n := 0
-	if x&0xFFFFFFFF == 0 {
-		n += 32
-		x >>= 32
-	}
-	if x&0xFFFF == 0 {
-		n += 16
-		x >>= 16
-	}
-	if x&0xFF == 0 {
-		n += 8
-		x >>= 8
-	}
-	if x&0x0F == 0 {
-		n += 4
-		x >>= 4
-	}
-	if x&0x03 == 0 {
-		n += 2
-		x >>= 2
-	}
-	if x&0x01 == 0 {
-		n += 1
-	}
-	return n
 }
