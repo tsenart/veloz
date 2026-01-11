@@ -175,6 +175,31 @@ func BenchmarkThresholdSweep(b *testing.B) {
 	}
 }
 
+// BenchmarkCutoverContinue tests the optimization where 2-byte mode continues
+// from current position instead of restarting from the beginning.
+// This matters when cutover happens late in a large haystack.
+func BenchmarkCutoverContinue(b *testing.B) {
+	// Large haystack with rare characters (no false positives) for first ~50KB
+	// Then dense false positives that trigger cutover, followed by match
+	prefix := strings.Repeat("x", 50000)  // 50KB of no-match chars
+	falsePos := strings.Repeat("h", 500)  // 500 'h' chars = false positives for 'H'
+	suffix := "HHHHHHHH0"                 // The actual match
+	haystack := prefix + falsePos + suffix
+
+	needle := MakeNeedle("HHHHHHHH0")
+	expected := len(prefix) + len(falsePos)
+
+	b.SetBytes(int64(len(haystack)))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		result := SearchNeedle(haystack, needle)
+		if result != expected {
+			b.Fatalf("wrong result: got %d, want %d", result, expected)
+		}
+	}
+}
+
 // BenchmarkNonLetterNeedle tests non-letter rare bytes (uses faster VAND-free path).
 func BenchmarkNonLetterNeedle(b *testing.B) {
 	sizes := []struct {

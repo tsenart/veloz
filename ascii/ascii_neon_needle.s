@@ -453,7 +453,33 @@ verify_fail_1byte:
 	LSR   $8, R17, R17            // bytes_scanned >> 8
 	ADD   $4, R17, R17            // threshold = 4 + (bytes_scanned >> 8)
 	CMP   R17, R25
-	BGT   setup_2byte_mode        // Too many failures, switch to 2-byte
+	BLE   verify_fail_continue    // Continue 1-byte mode
+	
+	// Cutover to 2-byte mode - back up to chunk start first
+	// R14 encoding:
+	// - 0x100: 16-byte path (both letter and non-letter)
+	// - >= 128 (but < 0x100): 32-byte mode (128=chunk0, 144=chunk1)
+	// - < 64: 128-byte mode
+	CMP   $0x100, R14
+	BEQ   cutover_16byte
+	CMP   $64, R14
+	BGE   cutover_32byte
+	// 128-byte mode: back up 128 bytes
+	SUB   $128, R10, R10
+	ADD   $128, R12, R12
+	B     setup_2byte_mode
+cutover_32byte:
+	// 32-byte mode: back up 32 bytes
+	SUB   $32, R10, R10
+	ADD   $32, R12, R12
+	B     setup_2byte_mode
+cutover_16byte:
+	// 16-byte mode: back up 16 bytes
+	SUB   $16, R10, R10
+	ADD   $16, R12, R12
+	B     setup_2byte_mode
+
+verify_fail_continue:
 
 	// Check if we're in non-letter mode (R26 == 0x00)
 	CBZ   R26, verify_fail_nl
@@ -563,8 +589,11 @@ verify_fail16_1byte:
 	LSR   $8, R17, R17             // bytes_scanned >> 8 (1 failure per 256 bytes)
 	ADD   $4, R17, R17
 	CMP   R17, R25
-	BGT   setup_2byte_mode
-	B     clear16_1byte
+	BLE   clear16_1byte
+	// Cutover to 2-byte mode - back up 16 bytes to chunk start
+	SUB   $16, R10, R10
+	ADD   $16, R12, R12
+	B     setup_2byte_mode
 
 clear16_1byte:
 	ADD   $1, R15, R17
@@ -649,7 +678,7 @@ scalar_fail_1byte:
 	LSR   $8, R17, R17             // bytes_scanned >> 8 (1 failure per 256 bytes)
 	ADD   $4, R17, R17
 	CMP   R17, R25
-	BGT   setup_2byte_mode
+	BGT   setup_2byte_mode         // Scalar: R10 not yet incremented, no backup needed
 
 scalar_next_1byte:
 	ADD   $1, R10
@@ -1052,7 +1081,9 @@ scalar_next_nl:
 	B     not_found
 
 // ============================================================================
-// 2-BYTE MODE SETUP: Restart search using 2-byte filtering from current position
+// 2-BYTE MODE SETUP: Continue search using 2-byte filtering from current chunk
+// Caller has backed up R10 to the start of the current chunk and adjusted R12.
+// This ensures we only re-scan the current chunk, not the entire haystack.
 // ============================================================================
 
 setup_2byte_mode:
@@ -1088,12 +1119,9 @@ setup_rare2_done:
 	MOVD  $tail_mask_table<>(SB), R16  // R16 = tail mask table
 	MOVW  $15, R15                     // R15 = 0xF for clearing syndrome bits
 
-	// Restart search from beginning in 2-byte mode
-	// This is simpler and correct - we only cutover after many failures
-	// so re-scanning a small portion is acceptable
-	ADD   R3, R0, R10             // R10 = search at off1 (start over)
-	MOVD  R10, R11                // R11 = original searchPtr start
-	ADD   $1, R9, R12             // R12 = remaining = searchLen + 1
+	// Continue from current position (R10/R11/R12 already set by caller)
+	// The caller backed up R10 to the start of the current chunk and
+	// adjusted R12 accordingly, so 2-byte mode re-scans just that chunk
 
 	B     loop64_2byte_entry
 
