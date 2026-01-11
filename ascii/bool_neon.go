@@ -22,6 +22,7 @@ func searchTBL_NEON(
 ) uint64
 
 // searchFDR_NEON is the NEON-accelerated FDR engine for 9-64 patterns.
+// Uses TBL prefilter for fast path, then FDR hash confirmation.
 // Returns the final foundMask after scanning the haystack.
 //
 //go:noescape
@@ -30,6 +31,9 @@ func searchFDR_NEON(
 	stateTable *uint64,
 	domainMask uint32,
 	stride int,
+	coarseLo *[16]uint8,
+	coarseHi *[16]uint8,
+	groupLUT *[256]uint64,
 	verifyValues *[64]uint64,
 	verifyMasks *[64]uint64,
 	verifyLengths *[64]uint8,

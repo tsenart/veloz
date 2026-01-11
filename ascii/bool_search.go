@@ -207,6 +207,14 @@ type BooleanSearch struct {
 		domainMask uint32   // (1 << domain) - 1
 		stride     int      // 1, 2, or 4
 		stateTable []uint64 // 2^domain entries, each is 64-bit pattern mask
+
+		// TBL prefilter: coarse group-based filtering to skip most FDR lookups
+		// Patterns are partitioned into 8 groups (0-7). The TBL lookup gives
+		// an 8-bit mask where bit g=1 means group g might have a match.
+		coarseLo   [16]uint8   // nibble → 8-bit group mask (inverted: 0=might match)
+		coarseHi   [16]uint8   // nibble → 8-bit group mask (inverted: 0=might match)
+		groupMasks [8]uint64   // for each group, which patterns (64-bit mask) belong to it
+		groupLUT   [256]uint64 // 8-bit group mask → 64-bit pattern mask (precomputed)
 	}
 
 	// === Verification ===
@@ -421,6 +429,84 @@ func (bs *BooleanSearch) buildFDRTables() {
 		// Generate all hash values this pattern could match
 		// For short patterns (< 4 bytes), we need to handle don't-care bytes
 		bs.populateFDRPattern(p, patBit)
+	}
+
+	// Build coarse TBL prefilter tables for NEON fast path
+	bs.buildFDRCoarseTables()
+}
+
+// buildFDRCoarseTables builds the TBL prefilter tables for FDR.
+// Patterns are partitioned into 8 groups based on first byte characteristics.
+// The TBL lookup gives a quick candidate filter before doing expensive hash lookups.
+func (bs *BooleanSearch) buildFDRCoarseTables() {
+	// Initialize coarse tables to all 1s (no groups can match)
+	// Inverted logic: 0 bit = group might match, 1 bit = definitely doesn't match
+	for i := range bs.fdr.coarseLo {
+		bs.fdr.coarseLo[i] = 0xFF
+		bs.fdr.coarseHi[i] = 0xFF
+	}
+
+	// Initialize group masks
+	for i := range bs.fdr.groupMasks {
+		bs.fdr.groupMasks[i] = 0
+	}
+
+	// Assign patterns to groups using round-robin based on pattern ID
+	// This gives reasonable distribution. Alternative: group by first byte rarity.
+	for _, p := range bs.patterns {
+		if len(p.Text) == 0 {
+			continue
+		}
+
+		groupID := p.ID % 8 // Simple round-robin assignment
+		groupBit := uint8(1 << groupID)
+		patBit := uint64(1) << p.ID
+
+		// Add pattern to its group
+		bs.fdr.groupMasks[groupID] |= patBit
+
+		// Update coarse TBL tables based on first byte
+		c := p.Text[0]
+
+		if p.CaseSensitive {
+			// Only exact match
+			loNib := c & 0x0F
+			hiNib := c >> 4
+			bs.fdr.coarseLo[loNib] &^= groupBit
+			bs.fdr.coarseHi[hiNib] &^= groupBit
+		} else {
+			// Case-insensitive: handle both cases for letters
+			if isAlpha(c) {
+				upper := c &^ 0x20
+				lower := c | 0x20
+
+				// Upper case nibbles
+				bs.fdr.coarseLo[upper&0x0F] &^= groupBit
+				bs.fdr.coarseHi[upper>>4] &^= groupBit
+
+				// Lower case nibbles
+				bs.fdr.coarseLo[lower&0x0F] &^= groupBit
+				bs.fdr.coarseHi[lower>>4] &^= groupBit
+			} else {
+				// Non-letter: exact nibbles only
+				loNib := c & 0x0F
+				hiNib := c >> 4
+				bs.fdr.coarseLo[loNib] &^= groupBit
+				bs.fdr.coarseHi[hiNib] &^= groupBit
+			}
+		}
+	}
+
+	// Build groupLUT: 256-entry table mapping 8-bit group mask → 64-bit pattern mask
+	// This replaces 8 conditional branches with a single table lookup
+	for groupMask := 0; groupMask < 256; groupMask++ {
+		var patternMask uint64
+		for g := 0; g < 8; g++ {
+			if groupMask&(1<<g) != 0 {
+				patternMask |= bs.fdr.groupMasks[g]
+			}
+		}
+		bs.fdr.groupLUT[groupMask] = patternMask
 	}
 }
 
@@ -770,12 +856,15 @@ func (bs *BooleanSearch) searchFDR(haystack string, foundMask uint64) uint64 {
 		return bs.searchFDRGo(haystack, foundMask)
 	}
 
-	// Use NEON implementation (handles all pattern lengths with long verification)
+	// Use NEON implementation with TBL prefilter + FDR confirmation
 	return searchFDR_NEON(
 		haystack,
 		&bs.fdr.stateTable[0],
 		bs.fdr.domainMask,
 		bs.fdr.stride,
+		&bs.fdr.coarseLo,
+		&bs.fdr.coarseHi,
+		&bs.fdr.groupLUT,
 		&bs.verify.values,
 		&bs.verify.masks,
 		&bs.verify.lengths,

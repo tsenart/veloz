@@ -657,6 +657,7 @@ func BenchmarkBoolSearchManyPatterns(b *testing.B) {
 
 	patternCounts := []int{9, 16, 32, 48, 64}
 
+	// Patterns with same first byte (worst case for TBL prefilter)
 	for _, n := range patternCounts {
 		patterns := make([]string, n)
 		for i := 0; i < n; i++ {
@@ -669,7 +670,29 @@ func BenchmarkBoolSearchManyPatterns(b *testing.B) {
 		}
 		bs := MakeBooleanSearch(expr)
 
-		b.Run(fmt.Sprintf("FDR_%d_patterns", n), func(b *testing.B) {
+		b.Run(fmt.Sprintf("FDR_%d_SameStart", n), func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				boolBenchSink = bs.Match(haystack)
+			}
+		})
+	}
+
+	// Patterns with different first bytes (best case for TBL prefilter)
+	for _, n := range patternCounts {
+		patterns := make([]string, n)
+		starts := "!@#$%^&*()_+-=[]{}|;':\",./<>?`~0123456789"
+		for i := 0; i < n; i++ {
+			patterns[i] = fmt.Sprintf("%cpat%02d", starts[i%len(starts)], i)
+		}
+
+		var expr BoolExpr = Contains(patterns[0])
+		for i := 1; i < n; i++ {
+			expr = Or(expr, Contains(patterns[i]))
+		}
+		bs := MakeBooleanSearch(expr)
+
+		b.Run(fmt.Sprintf("FDR_%d_DiffStart", n), func(b *testing.B) {
 			b.SetBytes(int64(len(haystack)))
 			for i := 0; i < b.N; i++ {
 				boolBenchSink = bs.Match(haystack)
