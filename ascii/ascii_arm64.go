@@ -62,6 +62,10 @@ func IndexAny(data, chars string) int {
 	return indexAnyNeonBitset(data, bitset[0], bitset[1], bitset[2], bitset[3])
 }
 
+func indexFoldRabinKarp(a, b string) int {
+	return indexFoldGo(a, b)
+}
+
 // IndexFold finds the first case-insensitive match of needle in haystack.
 // Uses the same optimized NEON path as SearchNeedle but computes rare bytes inline.
 func IndexFold(haystack, needle string) int {
@@ -79,7 +83,7 @@ func IndexFold(haystack, needle string) int {
 	rare1, off1, rare2, off2 := selectRarePair(needle, nil)
 	// Normalize needle once - assembly expects uppercase needle for fast verification
 	norm := normalizeASCII(needle)
-	return indexFoldNeedleNEON(haystack, rare1, off1, rare2, off2, norm)
+	return indexFoldNEON(haystack, rare1, off1, rare2, off2, norm)
 }
 
 // SearchNeedle finds the first case-insensitive match of the precomputed needle in haystack.
@@ -99,5 +103,5 @@ func SearchNeedle(haystack string, n Needle) int {
 	if len(haystack) < 16 {
 		return indexFoldGo(haystack, n.raw)
 	}
-	return indexFoldNeedleNEON(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+	return indexFoldNEON(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
 }

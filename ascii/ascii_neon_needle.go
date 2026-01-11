@@ -17,9 +17,3 @@ package ascii
 //
 //go:noescape
 func indexFoldNeedleNEON(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, normNeedle string) int
-
-// indexFoldNeedleGoDriver is the new Go driver + C primitives implementation.
-// Uses IndexByteFoldNeon and IndexTwoBytesFoldNeon C primitives with Go state machine.
-func indexFoldNeedleGoDriver(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, normNeedle string) int {
-	return searchWithRareBytesGoDriver(haystack, normNeedle, rare1, off1, rare2, off2)
-}
