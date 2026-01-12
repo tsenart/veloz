@@ -1656,7 +1656,7 @@ func buildRankTable(corpus string) [256]byte {
 	return ranks
 }
 
-func FuzzSearchNeedle(f *testing.F) {
+func FuzzSearcherCaseInsensitive(f *testing.F) {
 	f.Add("hello world", "world")
 	f.Add("The Quick Brown Fox", "quick")
 	f.Add(strings.Repeat("a", 100), "aaa")
@@ -1696,8 +1696,8 @@ func FuzzSearchNeedle(f *testing.F) {
 	})
 }
 
-// FuzzIndex tests case-sensitive Index against strings.Index
-func FuzzIndex(f *testing.F) {
+// FuzzSearcherCaseSensitive tests case-sensitive Searcher against strings.Index
+func FuzzSearcherCaseSensitive(f *testing.F) {
 	f.Add("hello world", "world")
 	f.Add("The Quick Brown Fox", "Quick")
 	f.Add(strings.Repeat("a", 100), "aaa")
