@@ -2,7 +2,9 @@
 
 package ascii
 
-import "unsafe"
+import "strings"
+
+
 
 // CharSet represents a precomputed character set for fast IndexAny lookups.
 // Build once with MakeCharSet, then reuse with IndexAnyCharSet.
@@ -75,18 +77,9 @@ func IndexFold(haystack, needle string) int {
 	if len(haystack) < len(needle) {
 		return -1
 	}
-	// Fast path for single-byte needle: use IndexAny with both cases
-	if len(needle) == 1 {
-		c := needle[0]
-		var chars [2]byte
-		if c >= 'A' && c <= 'Z' {
-			chars[0], chars[1] = c, c+32
-			return IndexAny(haystack, unsafe.String(&chars[0], 2))
-		} else if c >= 'a' && c <= 'z' {
-			chars[0], chars[1] = c-32, c
-			return IndexAny(haystack, unsafe.String(&chars[0], 2))
-		}
-		return IndexAny(haystack, needle)
+	// SIMD verification reads 16 bytes, Go fallback for short needles
+	if len(needle) <= 16 {
+		return indexFoldGo(haystack, needle)
 	}
 	// O(1) rare byte selection
 	rare1, off1, rare2, off2 := selectRarePair(needle, nil)
@@ -116,6 +109,10 @@ func Index(haystack, needle string) int {
 	}
 	if len(haystack) < len(needle) {
 		return -1
+	}
+	// SIMD verification reads 16 bytes, use stdlib for short needles
+	if len(needle) <= 16 {
+		return strings.Index(haystack, needle)
 	}
 	// O(1) rare byte selection (returns lowercase bytes, but we need offsets)
 	_, off1, _, off2 := selectRarePair(needle, nil)
