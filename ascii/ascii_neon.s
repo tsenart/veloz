@@ -569,6 +569,13 @@ setup_rare1:
 	VMOV  R10, V5.D[0]
 	VMOV  R10, V5.D[1]
 
+	// Setup constants for vectorized verification (used by both 1-byte and 2-byte modes)
+	// V4 = 159 (-97 as unsigned), V7 = 26, V8 = 32 (0x20)
+	WORD  $0x4f04e7e4             // VMOVI $159, V4.B16
+	WORD  $0x4f00e747             // VMOVI $26, V7.B16
+	WORD  $0x4f01e408             // VMOVI $32, V8.B16
+	MOVD  $tail_mask_table<>(SB), R24  // R24 = tail mask table (callee-saved, never clobbered)
+
 	// Setup pointers
 	ADD   R3, R0, R10             // R10 = searchPtr = haystack + off1
 	MOVD  R10, R11                // R11 = original searchPtr start
@@ -717,18 +724,18 @@ loop128_1byte:
 	VCMEQ V1.B16, V30.B16, V30.B16
 	VCMEQ V1.B16, V31.B16, V31.B16
 
-	// Combine all 8 chunks for quick check
-	VORR  V20.B16, V21.B16, V6.B16
-	VORR  V22.B16, V23.B16, V7.B16
-	VORR  V28.B16, V29.B16, V8.B16
-	VORR  V30.B16, V31.B16, V9.B16
-	VORR  V6.B16, V7.B16, V6.B16
-	VORR  V8.B16, V9.B16, V8.B16
-	VORR  V6.B16, V8.B16, V6.B16
+	// Combine all 8 chunks for quick check (use V9-V12, avoiding V7/V8 constants)
+	VORR  V20.B16, V21.B16, V9.B16
+	VORR  V22.B16, V23.B16, V10.B16
+	VORR  V28.B16, V29.B16, V11.B16
+	VORR  V30.B16, V31.B16, V12.B16
+	VORR  V9.B16, V10.B16, V9.B16
+	VORR  V11.B16, V12.B16, V11.B16
+	VORR  V9.B16, V11.B16, V9.B16
 
 	// Fast reduce to check if any matches
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
+	VADDP V9.D2, V9.D2, V9.D2
+	VMOV  V9.D[0], R13
 	
 	// Early exit: no matches in 128 bytes
 	CMP   $128, R12
@@ -739,18 +746,18 @@ end128_1byte:
 	// We have potential matches or exhausted large chunks
 	CBZ   R13, loop32_main        // No matches, fall through to 32-byte loop
 	
-	// Check first 64 bytes
+	// Check first 64 bytes (use V6, V9 to avoid clobbering V7/V8 constants)
 	VORR  V20.B16, V21.B16, V6.B16
-	VORR  V22.B16, V23.B16, V7.B16
-	VORR  V6.B16, V7.B16, V6.B16
+	VORR  V22.B16, V23.B16, V9.B16
+	VORR  V6.B16, V9.B16, V6.B16
 	VADDP V6.D2, V6.D2, V6.D2
 	VMOV  V6.D[0], R13
 	CBNZ  R13, end128_first64_1byte
 
-	// Check second 64 bytes
+	// Check second 64 bytes (use V6, V9 to avoid clobbering V7/V8 constants)
 	VORR  V28.B16, V29.B16, V6.B16
-	VORR  V30.B16, V31.B16, V7.B16
-	VORR  V6.B16, V7.B16, V6.B16
+	VORR  V30.B16, V31.B16, V9.B16
+	VORR  V6.B16, V9.B16, V6.B16
 	VADDP V6.D2, V6.D2, V6.D2
 	VMOV  V6.D[0], R13
 	CBNZ  R13, end128_second64_1byte
@@ -766,8 +773,7 @@ end128_first64_1byte:
 	VAND  V5.B16, V21.B16, V21.B16
 	VAND  V5.B16, V22.B16, V22.B16
 	VAND  V5.B16, V23.B16, V23.B16
-	MOVD  $64, R17
-	VMOV  R17, V4.D[0]            // Store block offset in V4 (64 = first block)
+	MOVD  $64, R20                // R20 = block offset (64 = first block), preserved across verify
 	B     check_chunks_1byte
 
 end128_second64_1byte:
@@ -780,7 +786,7 @@ end128_second64_1byte:
 	VAND  V5.B16, V21.B16, V21.B16
 	VAND  V5.B16, V22.B16, V22.B16
 	VAND  V5.B16, V23.B16, V23.B16
-	VMOV  ZR, V4.D[0]             // Store block offset in V4 (0 = second block)
+	MOVD  ZR, R20                 // R20 = block offset (0 = second block), preserved across verify
 	B     check_chunks_1byte
 
 check_chunks_1byte:
@@ -813,17 +819,16 @@ check_chunks_1byte:
 	CBNZ  R13, try_match_1byte
 
 	// No matches in this block, check if we should continue with first 64
-	VMOV  V4.D[0], R17
-	CBNZ  R17, check_second64_after_first
+	CBNZ  R23, check_second64_after_first    // R23 = block offset (64 = first, 0 = second)
 	CMP   $128, R12
 	BGE   loop128_1byte
 	B     loop32_main
 
 check_second64_after_first:
-	// We were in first 64, now check second 64
+	// We were in first 64, now check second 64 (use V6, V9 to avoid clobbering V7/V8)
 	VORR  V28.B16, V29.B16, V6.B16
-	VORR  V30.B16, V31.B16, V7.B16
-	VORR  V6.B16, V7.B16, V6.B16
+	VORR  V30.B16, V31.B16, V9.B16
+	VORR  V6.B16, V9.B16, V6.B16
 	VADDP V6.D2, V6.D2, V6.D2
 	VMOV  V6.D[0], R13
 	CBZ   R13, continue_128_check
@@ -835,13 +840,12 @@ continue_128_check:
 	B     loop32_main
 
 try_match_1byte:
-	// R13 = syndrome, R14 = chunk offset, V4.D[0] = block offset
+	// R13 = syndrome, R14 = chunk offset, R20 = block offset (preserved across verify)
 	RBIT  R13, R15
 	CLZ   R15, R15
 	LSR   $1, R15, R15            // bit position -> byte position
 	ADD   R14, R15, R15           // add chunk offset
-	VMOV  V4.D[0], R17
-	SUB   R17, R15, R15           // adjust for block (0 or 64)
+	SUB   R20, R15, R15           // adjust for block (0 or 64)
 	ADD   $64, R15, R15           // adjust since second VLD1 was +64
 
 	// Calculate position in haystack
@@ -873,8 +877,7 @@ clear_128_1byte:
 	BLT   check_next_chunk_1byte
 exhausted_first64_1byte:
 	// Exhausted this block - check if we need second 64 bytes
-	VMOV  V4.D[0], R17
-	CBNZ  R17, check_second64_after_first
+	CBNZ  R20, check_second64_after_first    // R20 = block offset (64 = first, 0 = second)
 	B     continue_128_check
 
 check_next_chunk_1byte:
@@ -906,52 +909,59 @@ chunk3_1byte:
 	B     exhausted_first64_1byte
 
 verify_match_1byte:
-	// Quick checks: first and last byte
-	// Needle is pre-normalized to lowercase, only fold haystack
-	MOVBU (R8), R17
-	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
-	CMPW  $26, R19
-	BCS   vnf1a
-	ORRW  $0x20, R17, R17         // Force lowercase
-vnf1a:
-	MOVBU (R6), R19
-	CMPW  R19, R17
-	BNE   verify_fail_1byte
-
-	ADD   R7, R8, R17
-	SUB   $1, R17
-	MOVBU (R17), R17
-	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
-	CMPW  $26, R19
-	BCS   vnf1b
-	ORRW  $0x20, R17, R17         // Force lowercase
-vnf1b:
-	ADD   R7, R6, R19
-	SUB   $1, R19
-	MOVBU (R19), R19
-	CMPW  R19, R17
-	BNE   verify_fail_1byte
-
-	// Full verification loop
-	MOVD  R8, R17
-	MOVD  R6, R19
-	MOVD  R7, R20
+	// Vectorized verification - 16 bytes at a time with NEON
+	// Same algorithm as 2-byte mode: XOR + case-fold for letters
+	MOVD  R7, R19                  // R19 = remaining needle length
+	MOVD  R8, R21                  // R21 = haystack candidate ptr
+	MOVD  R6, R22                  // R22 = needle ptr
 
 vloop_1byte:
-	CBZ   R20, found
-	MOVBU (R17), R21
-	MOVBU (R19), R22
-	SUBW  $65, R21, R23           // Check if uppercase (A-Z)
-	CMPW  $26, R23
-	BCS   vnf1c
-	ORRW  $0x20, R21, R21         // Force lowercase
-vnf1c:
-	CMPW  R22, R21
-	BNE   verify_fail_1byte
-	ADD   $1, R17
-	ADD   $1, R19
-	SUB   $1, R20
-	B     vloop_1byte
+	SUBS  $16, R19, R23            // R23 = remaining - 16
+	BLT   vtail_1byte
+
+	// Load 16 bytes from haystack and needle
+	VLD1.P 16(R21), [V10.B16]
+	VLD1.P 16(R22), [V11.B16]
+	MOVD   R23, R19
+
+	// Case-insensitive compare using XOR + letter detection
+	VEOR  V10.B16, V11.B16, V12.B16 // V12 = XOR diff
+	VCMEQ V8.B16, V12.B16, V14.B16  // V14 = (XOR == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20 (force lowercase)
+	VADD  V4.B16, V13.B16, V13.B16  // V13 = (h|0x20) + 159
+	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16 (is letter)
+	VAND  V14.B16, V13.B16, V13.B16 // V13 = (XOR==0x20 && is_letter) ? 0xFF : 0
+	VAND  V8.B16, V13.B16, V13.B16  // V13 = mask ? 0x20 : 0
+	VEOR  V13.B16, V12.B16, V10.B16 // V10 = diff with case masked out
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10 (any non-zero?)
+	FMOVS F10, R23
+	CBZW  R23, vloop_1byte
+	B     verify_fail_1byte        // mismatch
+
+vtail_1byte:
+	// Handle 1-15 remaining bytes using tail_mask_table
+	CMP   $1, R19
+	BLT   found                    // R19 <= 0 means we matched everything
+
+	// Load with tail mask
+	VLD1  (R21), [V10.B16]
+	VLD1  (R22), [V11.B16]
+	WORD  $0x3cf37b0d               // FMOVQ (R24)(R19<<4), F13  // ldr q13, [x24, x19, lsl #4]
+
+	// Same case-insensitive compare
+	VEOR  V10.B16, V11.B16, V12.B16
+	VCMEQ V8.B16, V12.B16, V14.B16
+	VORR  V8.B16, V10.B16, V15.B16
+	VADD  V4.B16, V15.B16, V15.B16
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16
+	VAND  V14.B16, V15.B16, V15.B16
+	VAND  V8.B16, V15.B16, V15.B16
+	VEOR  V15.B16, V12.B16, V10.B16
+	VAND  V13.B16, V10.B16, V10.B16 // mask out bytes beyond needle
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBNZW R23, verify_fail_1byte
+	B     found
 
 verify_fail_1byte:
 	// Increment failure counter
@@ -1051,49 +1061,53 @@ try16_1byte:
 
 	ADD   R0, R16, R8
 
-	MOVBU (R8), R17
-	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
-	CMPW  $26, R19
-	BCS   vnf16a_1
-	ORRW  $0x20, R17, R17         // Force lowercase
-vnf16a_1:
-	MOVBU (R6), R19
-	CMPW  R19, R17
-	BNE   verify_fail16_1byte
-
-	ADD   R7, R8, R17
-	SUB   $1, R17
-	MOVBU (R17), R17
-	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
-	CMPW  $26, R19
-	BCS   vnf16b_1
-	ORRW  $0x20, R17, R17         // Force lowercase
-vnf16b_1:
-	ADD   R7, R6, R19
-	SUB   $1, R19
-	MOVBU (R19), R19
-	CMPW  R19, R17
-	BNE   verify_fail16_1byte
-
-	MOVD  R8, R17
-	MOVD  R6, R19
-	MOVD  R7, R20
+	// Use shared vectorized verification
+	MOVD  R7, R19                  // R19 = remaining needle length
+	MOVD  R8, R21                  // R21 = haystack candidate ptr
+	MOVD  R6, R22                  // R22 = needle ptr
 
 vloop16_1byte:
-	CBZ   R20, found
-	MOVBU (R17), R21
-	MOVBU (R19), R22
-	SUBW  $65, R21, R23           // Check if uppercase (A-Z)
-	CMPW  $26, R23
-	BCS   vnf16c_1
-	ORRW  $0x20, R21, R21         // Force lowercase
-vnf16c_1:
-	CMPW  R22, R21
-	BNE   verify_fail16_1byte
-	ADD   $1, R17
-	ADD   $1, R19
-	SUB   $1, R20
-	B     vloop16_1byte
+	SUBS  $16, R19, R23
+	BLT   vtail16_1byte
+
+	VLD1.P 16(R21), [V10.B16]
+	VLD1.P 16(R22), [V11.B16]
+	MOVD   R23, R19
+
+	VEOR  V10.B16, V11.B16, V12.B16
+	VCMEQ V8.B16, V12.B16, V14.B16
+	VORR  V8.B16, V10.B16, V13.B16
+	VADD  V4.B16, V13.B16, V13.B16
+	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16
+	VAND  V14.B16, V13.B16, V13.B16
+	VAND  V8.B16, V13.B16, V13.B16
+	VEOR  V13.B16, V12.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBZW  R23, vloop16_1byte
+	B     verify_fail16_1byte
+
+vtail16_1byte:
+	CMP   $1, R19
+	BLT   found
+
+	VLD1  (R21), [V10.B16]
+	VLD1  (R22), [V11.B16]
+	WORD  $0x3cf37b0d               // FMOVQ (R24)(R19<<4), F13
+
+	VEOR  V10.B16, V11.B16, V12.B16
+	VCMEQ V8.B16, V12.B16, V14.B16
+	VORR  V8.B16, V10.B16, V15.B16
+	VADD  V4.B16, V15.B16, V15.B16
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16
+	VAND  V14.B16, V15.B16, V15.B16
+	VAND  V8.B16, V15.B16, V15.B16
+	VEOR  V15.B16, V12.B16, V10.B16
+	VAND  V13.B16, V10.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBNZW R23, verify_fail16_1byte
+	B     found
 
 verify_fail16_1byte:
 	ADD   $1, R25, R25
@@ -1140,49 +1154,59 @@ scalar_1byte:
 
 	ADD   R0, R16, R8
 
-	MOVBU (R8), R17
-	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
-	CMPW  $26, R19
-	BCS   snf1_1
-	ORRW  $0x20, R17, R17         // Force lowercase
-snf1_1:
-	MOVBU (R6), R19
-	CMPW  R19, R17
-	BNE   scalar_fail_1byte
+	// Use vectorized verification (same as other 1-byte paths)
+	MOVD  R7, R19                  // R19 = remaining needle length
+	MOVD  R8, R21                  // R21 = haystack candidate ptr
+	MOVD  R6, R22                  // R22 = needle ptr
+	MOVD  $0x100, R14              // Mark as scalar path for cutover
 
-	ADD   R7, R8, R17
-	SUB   $1, R17
-	MOVBU (R17), R17
-	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
-	CMPW  $26, R19
-	BCS   snf2_1
-	ORRW  $0x20, R17, R17         // Force lowercase
-snf2_1:
-	ADD   R7, R6, R19
-	SUB   $1, R19
-	MOVBU (R19), R19
-	CMPW  R19, R17
-	BNE   scalar_fail_1byte
+vloop_scalar_1byte:
+	SUBS  $16, R19, R23            // R23 = remaining - 16
+	BLT   vtail_scalar_1byte
 
-	MOVD  R8, R17
-	MOVD  R6, R19
-	MOVD  R7, R20
+	// Load 16 bytes from haystack and needle
+	VLD1.P 16(R21), [V10.B16]
+	VLD1.P 16(R22), [V11.B16]
+	MOVD   R23, R19
 
-sloop_1byte:
-	CBZ   R20, found
-	MOVBU (R17), R21
-	MOVBU (R19), R22
-	SUBW  $65, R21, R23           // Check if uppercase (A-Z)
-	CMPW  $26, R23
-	BCS   snf3_1
-	ORRW  $0x20, R21, R21         // Force lowercase
-snf3_1:
-	CMPW  R22, R21
-	BNE   scalar_fail_1byte
-	ADD   $1, R17
-	ADD   $1, R19
-	SUB   $1, R20
-	B     sloop_1byte
+	// Case-insensitive compare using XOR + letter detection
+	VEOR  V10.B16, V11.B16, V12.B16 // V12 = XOR diff
+	VCMEQ V8.B16, V12.B16, V14.B16  // V14 = (XOR == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20 (force lowercase)
+	VADD  V4.B16, V13.B16, V13.B16  // V13 = (h|0x20) + 159
+	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16 (is letter)
+	VAND  V14.B16, V13.B16, V13.B16 // V13 = (XOR==0x20 && is_letter) ? 0xFF : 0
+	VAND  V8.B16, V13.B16, V13.B16  // V13 = mask ? 0x20 : 0
+	VEOR  V13.B16, V12.B16, V10.B16 // V10 = diff with case masked out
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10 (any non-zero?)
+	FMOVS F10, R23
+	CBZW  R23, vloop_scalar_1byte
+	B     scalar_fail_1byte        // mismatch
+
+vtail_scalar_1byte:
+	// Handle 1-15 remaining bytes using tail_mask_table
+	CMP   $1, R19
+	BLT   found                    // R19 <= 0 means we matched everything
+
+	// Load with tail mask
+	VLD1  (R21), [V10.B16]
+	VLD1  (R22), [V11.B16]
+	WORD  $0x3cf37b0d               // FMOVQ (R24)(R19<<4), F13  // ldr q13, [x24, x19, lsl #4]
+
+	// Same case-insensitive compare
+	VEOR  V10.B16, V11.B16, V12.B16
+	VCMEQ V8.B16, V12.B16, V14.B16
+	VORR  V8.B16, V10.B16, V15.B16
+	VADD  V4.B16, V15.B16, V15.B16
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16
+	VAND  V14.B16, V15.B16, V15.B16
+	VAND  V8.B16, V15.B16, V15.B16
+	VEOR  V15.B16, V12.B16, V10.B16
+	VAND  V13.B16, V10.B16, V10.B16 // mask out bytes beyond needle
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBNZW R23, scalar_fail_1byte
+	B     found
 
 scalar_fail_1byte:
 	ADD   $1, R25, R25
@@ -1309,17 +1333,17 @@ loop128_nl:
 	VCMEQ V1.B16, V26.B16, V30.B16
 	VCMEQ V1.B16, V27.B16, V31.B16
 
-	// Combine all 8 chunks
-	VORR  V20.B16, V21.B16, V6.B16
-	VORR  V22.B16, V23.B16, V7.B16
-	VORR  V28.B16, V29.B16, V8.B16
-	VORR  V30.B16, V31.B16, V9.B16
-	VORR  V6.B16, V7.B16, V6.B16
-	VORR  V8.B16, V9.B16, V8.B16
-	VORR  V6.B16, V8.B16, V6.B16
+	// Combine all 8 chunks (use V9-V12, avoiding V7/V8 constants)
+	VORR  V20.B16, V21.B16, V9.B16
+	VORR  V22.B16, V23.B16, V10.B16
+	VORR  V28.B16, V29.B16, V11.B16
+	VORR  V30.B16, V31.B16, V12.B16
+	VORR  V9.B16, V10.B16, V9.B16
+	VORR  V11.B16, V12.B16, V11.B16
+	VORR  V9.B16, V11.B16, V9.B16
 
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
+	VADDP V9.D2, V9.D2, V9.D2
+	VMOV  V9.D[0], R13
 	
 	CMP   $128, R12
 	BLT   end128_nl
@@ -1328,18 +1352,18 @@ loop128_nl:
 end128_nl:
 	CBZ   R13, loop32_nl
 	
-	// Check first 64 bytes
+	// Check first 64 bytes (use V6, V9 to avoid clobbering V7/V8 constants)
 	VORR  V20.B16, V21.B16, V6.B16
-	VORR  V22.B16, V23.B16, V7.B16
-	VORR  V6.B16, V7.B16, V6.B16
+	VORR  V22.B16, V23.B16, V9.B16
+	VORR  V6.B16, V9.B16, V6.B16
 	VADDP V6.D2, V6.D2, V6.D2
 	VMOV  V6.D[0], R13
 	CBNZ  R13, end128_first64_nl
 
-	// Check second 64 bytes
+	// Check second 64 bytes (use V6, V9 to avoid clobbering V7/V8 constants)
 	VORR  V28.B16, V29.B16, V6.B16
-	VORR  V30.B16, V31.B16, V7.B16
-	VORR  V6.B16, V7.B16, V6.B16
+	VORR  V30.B16, V31.B16, V9.B16
+	VORR  V6.B16, V9.B16, V6.B16
 	VADDP V6.D2, V6.D2, V6.D2
 	VMOV  V6.D[0], R13
 	CBNZ  R13, end128_second64_nl
@@ -1353,8 +1377,7 @@ end128_first64_nl:
 	VAND  V5.B16, V21.B16, V21.B16
 	VAND  V5.B16, V22.B16, V22.B16
 	VAND  V5.B16, V23.B16, V23.B16
-	MOVD  $64, R17
-	VMOV  R17, V4.D[0]
+	MOVD  $64, R20                // R20 = block offset (64 = first block), preserved across verify
 	B     check_chunks_nl
 
 end128_second64_nl:
@@ -1366,7 +1389,7 @@ end128_second64_nl:
 	VAND  V5.B16, V21.B16, V21.B16
 	VAND  V5.B16, V22.B16, V22.B16
 	VAND  V5.B16, V23.B16, V23.B16
-	VMOV  ZR, V4.D[0]
+	MOVD  ZR, R20                 // R20 = block offset (0 = second block), preserved across verify
 	B     check_chunks_nl
 
 check_chunks_nl:
@@ -1394,16 +1417,16 @@ check_chunks_nl:
 	MOVD  $48, R14
 	CBNZ  R13, try_match_nl
 
-	VMOV  V4.D[0], R17
-	CBNZ  R17, check_second64_after_first_nl
+	CBNZ  R23, check_second64_after_first_nl   // R23 = block offset (64 = first, 0 = second)
 	CMP   $128, R12
 	BGE   loop128_nl
 	B     loop32_nl
 
 check_second64_after_first_nl:
+	// Use V6, V9 to avoid clobbering V7/V8 constants
 	VORR  V28.B16, V29.B16, V6.B16
-	VORR  V30.B16, V31.B16, V7.B16
-	VORR  V6.B16, V7.B16, V6.B16
+	VORR  V30.B16, V31.B16, V9.B16
+	VORR  V6.B16, V9.B16, V6.B16
 	VADDP V6.D2, V6.D2, V6.D2
 	VMOV  V6.D[0], R13
 	CBZ   R13, continue_128_check_nl
@@ -1419,8 +1442,7 @@ try_match_nl:
 	CLZ   R15, R15
 	LSR   $1, R15, R15
 	ADD   R14, R15, R15
-	VMOV  V4.D[0], R17
-	SUB   R17, R15, R15
+	SUB   R20, R15, R15           // adjust for block (0 or 64), R20 preserved across verify
 	ADD   $64, R15, R15
 
 	SUB   $128, R10, R16
@@ -1446,8 +1468,7 @@ clear_128_nl:
 	ADD   $16, R14, R14
 	CMP   $64, R14
 	BLT   check_next_chunk_nl
-	VMOV  V4.D[0], R17
-	CBNZ  R17, check_second64_after_first_nl
+	CBNZ  R20, check_second64_after_first_nl   // R20 = block offset (64 = first, 0 = second)
 	B     continue_128_check_nl
 
 check_next_chunk_nl:
@@ -1476,8 +1497,7 @@ chunk3_nl:
 	VADDP V6.B16, V6.B16, V6.B16
 	VMOV  V6.S[0], R13
 	CBNZ  R13, try_match_nl
-	VMOV  V4.D[0], R17
-	CBNZ  R17, check_second64_after_first_nl
+	CBNZ  R20, check_second64_after_first_nl   // R20 = block offset (64 = first, 0 = second)
 	B     continue_128_check_nl
 
 // 16-byte non-letter loop
@@ -1541,50 +1561,59 @@ scalar_nl:
 
 	ADD   R0, R16, R8
 
-	// Inline verification for scalar non-letter
-	MOVBU (R8), R17
-	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
-	CMPW  $26, R19
-	BCS   snf_nl_1
-	ORRW  $0x20, R17, R17         // Force lowercase
-snf_nl_1:
-	MOVBU (R6), R19
-	CMPW  R19, R17
-	BNE   scalar_next_nl
+	// Use vectorized verification (same as other 1-byte paths)
+	MOVD  R7, R19                  // R19 = remaining needle length
+	MOVD  R8, R21                  // R21 = haystack candidate ptr
+	MOVD  R6, R22                  // R22 = needle ptr
+	MOVD  $0x100, R14              // Mark as scalar path for cutover
 
-	ADD   R7, R8, R17
-	SUB   $1, R17
-	MOVBU (R17), R17
-	SUBW  $65, R17, R19           // Check if uppercase (A-Z)
-	CMPW  $26, R19
-	BCS   snf_nl_2
-	ORRW  $0x20, R17, R17         // Force lowercase
-snf_nl_2:
-	ADD   R7, R6, R19
-	SUB   $1, R19
-	MOVBU (R19), R19
-	CMPW  R19, R17
-	BNE   scalar_next_nl
+vloop_scalar_nl:
+	SUBS  $16, R19, R23            // R23 = remaining - 16
+	BLT   vtail_scalar_nl
 
-	MOVD  R8, R17
-	MOVD  R6, R19
-	MOVD  R7, R20
+	// Load 16 bytes from haystack and needle
+	VLD1.P 16(R21), [V10.B16]
+	VLD1.P 16(R22), [V11.B16]
+	MOVD   R23, R19
 
-sloop_nl:
-	CBZ   R20, found
-	MOVBU (R17), R21
-	MOVBU (R19), R22
-	SUBW  $65, R21, R23           // Check if uppercase (A-Z)
-	CMPW  $26, R23
-	BCS   snf_nl_3
-	ORRW  $0x20, R21, R21         // Force lowercase
-snf_nl_3:
-	CMPW  R22, R21
-	BNE   scalar_next_nl
-	ADD   $1, R17
-	ADD   $1, R19
-	SUB   $1, R20
-	B     sloop_nl
+	// Case-insensitive compare using XOR + letter detection
+	VEOR  V10.B16, V11.B16, V12.B16 // V12 = XOR diff
+	VCMEQ V8.B16, V12.B16, V14.B16  // V14 = (XOR == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20 (force lowercase)
+	VADD  V4.B16, V13.B16, V13.B16  // V13 = (h|0x20) + 159
+	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16 (is letter)
+	VAND  V14.B16, V13.B16, V13.B16 // V13 = (XOR==0x20 && is_letter) ? 0xFF : 0
+	VAND  V8.B16, V13.B16, V13.B16  // V13 = mask ? 0x20 : 0
+	VEOR  V13.B16, V12.B16, V10.B16 // V10 = diff with case masked out
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10 (any non-zero?)
+	FMOVS F10, R23
+	CBZW  R23, vloop_scalar_nl
+	B     scalar_next_nl           // mismatch, try next position
+
+vtail_scalar_nl:
+	// Handle 1-15 remaining bytes using tail_mask_table
+	CMP   $1, R19
+	BLT   found                    // R19 <= 0 means we matched everything
+
+	// Load with tail mask
+	VLD1  (R21), [V10.B16]
+	VLD1  (R22), [V11.B16]
+	WORD  $0x3cf37b0d               // FMOVQ (R24)(R19<<4), F13  // ldr q13, [x24, x19, lsl #4]
+
+	// Same case-insensitive compare
+	VEOR  V10.B16, V11.B16, V12.B16
+	VCMEQ V8.B16, V12.B16, V14.B16
+	VORR  V8.B16, V10.B16, V15.B16
+	VADD  V4.B16, V15.B16, V15.B16
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16
+	VAND  V14.B16, V15.B16, V15.B16
+	VAND  V8.B16, V15.B16, V15.B16
+	VEOR  V15.B16, V12.B16, V10.B16
+	VAND  V13.B16, V10.B16, V10.B16 // mask out bytes beyond needle
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBNZW R23, scalar_next_nl
+	B     found
 
 scalar_next_nl:
 	ADD   $1, R10
@@ -1621,14 +1650,13 @@ setup_rare2_done:
 	VDUP  R22, V3.B16             // V3 = rare2 target
 
 	// Setup vectorized verification constants (like NEON-64B)
-	// V4 = 191 (-65 as unsigned), V7 = 26, V8 = 32
-	// For lowercase normalization: check if (byte + 191) < 26, i.e., byte is uppercase A-Z
-	WORD  $0x4f05e7e4             // VMOVI $191, V4.B16 (for case-fold: byte + 191 = byte - 65)
+	// V4 = 159 (-97 as unsigned), V7 = 26, V8 = 32
+	// For letter detection: (byte | 0x20) + 159 < 26, i.e., byte is a-z or A-Z
+	WORD  $0x4f04e7e4             // VMOVI $159, V4.B16 (for case-fold: byte + 159 = byte - 97)
 	WORD  $0x4f00e747             // VMOVI $26, V7.B16
 	WORD  $0x4f01e408             // VMOVI $32, V8.B16
 
-	// Setup tail_mask_table pointer and bit-clear constant
-	MOVD  $tail_mask_table<>(SB), R16  // R16 = tail mask table
+	// Setup bit-clear constant (R24 already has tail_mask_table from function entry)
 	MOVW  $15, R15                     // R15 = 0xF for clearing syndrome bits
 
 	// Continue from current position (R10/R11/R12 already set by caller)
@@ -1768,15 +1796,17 @@ vloop64_2byte:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	// Vectorized case-insensitive compare:
-	// 1. XOR haystack with needle to find differences
-	// 2. For lowercase letters: add 159 (= -97 unsigned), if < 26, mask with 0x20
-	// 3. XOR result masks out case differences for letters
-	VADD  V4.B16, V10.B16, V12.B16  // V12 = haystack + 159 (= haystack - 97)
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = haystack XOR needle (differences)
-	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16 (26 > (h-97)? = is letter?)
-	VAND  V8.B16, V12.B16, V12.B16  // V12 = is_letter ? 0x20 : 0
-	VEOR  V12.B16, V10.B16, V10.B16 // V10 = diff with case masked out
+	// Case-insensitive compare:
+	// 1. XOR to find differences
+	// 2. Only mask 0x20 if XOR==0x20 AND byte is a letter
+	VEOR  V10.B16, V11.B16, V12.B16 // V12 = XOR diff
+	VCMEQ V8.B16, V12.B16, V14.B16  // V14 = (XOR == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20 (force lowercase)
+	VADD  V4.B16, V13.B16, V13.B16  // V13 = (h|0x20) + 159
+	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16 (is letter)
+	VAND  V14.B16, V13.B16, V13.B16 // V13 = (XOR==0x20 && is_letter) ? 0xFF : 0
+	VAND  V8.B16, V13.B16, V13.B16  // V13 = mask ? 0x20 : 0
+	VEOR  V13.B16, V12.B16, V10.B16 // V10 = diff with case masked out
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10 (any non-zero?)
 	FMOVS F10, R23
 	CBZW  R23, vloop64_2byte
@@ -1790,15 +1820,18 @@ vtail64_2byte:
 	// Load with tail mask
 	VLD1  (R21), [V10.B16]
 	VLD1  (R22), [V11.B16]
-	WORD  $0x3cf37a0d               // FMOVQ (R16)(R19<<4), F13  // ldr q13, [x16, x19, lsl #4]
+	WORD  $0x3cf37b0d               // FMOVQ (R24)(R19<<4), F13  // ldr q13, [x24, x19, lsl #4]
 
-	// Same case-insensitive compare
-	VADD  V4.B16, V10.B16, V12.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16
-	VAND  V8.B16, V12.B16, V12.B16
-	VEOR  V12.B16, V10.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16  // mask out bytes beyond needle
+	// Same case-insensitive compare (with XOR==0x20 check)
+	VEOR  V10.B16, V11.B16, V12.B16 // V12 = XOR diff
+	VCMEQ V8.B16, V12.B16, V14.B16  // V14 = (XOR == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V15.B16  // V15 = h | 0x20
+	VADD  V4.B16, V15.B16, V15.B16  // V15 = (h|0x20) + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is letter)
+	VAND  V14.B16, V15.B16, V15.B16 // V15 = (XOR==0x20 && is_letter) ? 0xFF : 0
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = mask ? 0x20 : 0
+	VEOR  V15.B16, V12.B16, V10.B16 // V10 = diff with case masked out
+	VAND  V13.B16, V10.B16, V10.B16 // mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, clear64_2byte
@@ -1904,11 +1937,15 @@ vloop16_2byte:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	VADD  V4.B16, V10.B16, V12.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16
-	VAND  V8.B16, V12.B16, V12.B16
-	VEOR  V12.B16, V10.B16, V10.B16
+	// Case-insensitive compare (with XOR==0x20 check)
+	VEOR  V10.B16, V11.B16, V12.B16 // V12 = XOR diff
+	VCMEQ V8.B16, V12.B16, V14.B16  // V14 = (XOR == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
+	VADD  V4.B16, V13.B16, V13.B16  // V13 = (h|0x20) + 159
+	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16 (is letter)
+	VAND  V14.B16, V13.B16, V13.B16 // V13 = (XOR==0x20 && is_letter) ? 0xFF : 0
+	VAND  V8.B16, V13.B16, V13.B16  // V13 = mask ? 0x20 : 0
+	VEOR  V13.B16, V12.B16, V10.B16 // V10 = diff with case masked out
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, vloop16_2byte
@@ -1920,14 +1957,18 @@ vtail16_2byte:
 
 	VLD1  (R21), [V10.B16]
 	VLD1  (R22), [V11.B16]
-	WORD  $0x3cf37a0d               // FMOVQ (R16)(R19<<4), F13
+	WORD  $0x3cf37b0d               // FMOVQ (R24)(R19<<4), F13
 
-	VADD  V4.B16, V10.B16, V12.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16
-	VAND  V8.B16, V12.B16, V12.B16
-	VEOR  V12.B16, V10.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16
+	// Case-insensitive compare (with XOR==0x20 check)
+	VEOR  V10.B16, V11.B16, V12.B16 // V12 = XOR diff
+	VCMEQ V8.B16, V12.B16, V14.B16  // V14 = (XOR == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V15.B16  // V15 = h | 0x20
+	VADD  V4.B16, V15.B16, V15.B16  // V15 = (h|0x20) + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is letter)
+	VAND  V14.B16, V15.B16, V15.B16 // V15 = (XOR==0x20 && is_letter) ? 0xFF : 0
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = mask ? 0x20 : 0
+	VEOR  V15.B16, V12.B16, V10.B16 // V10 = diff with case masked out
+	VAND  V13.B16, V10.B16, V10.B16 // mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, clear16_2byte
@@ -1989,11 +2030,15 @@ vloop_scalar_2byte:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	VADD  V4.B16, V10.B16, V12.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16
-	VAND  V8.B16, V12.B16, V12.B16
-	VEOR  V12.B16, V10.B16, V10.B16
+	// Case-insensitive compare (with XOR==0x20 check)
+	VEOR  V10.B16, V11.B16, V12.B16 // V12 = XOR diff
+	VCMEQ V8.B16, V12.B16, V14.B16  // V14 = (XOR == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
+	VADD  V4.B16, V13.B16, V13.B16  // V13 = (h|0x20) + 159
+	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16 (is letter)
+	VAND  V14.B16, V13.B16, V13.B16 // V13 = (XOR==0x20 && is_letter) ? 0xFF : 0
+	VAND  V8.B16, V13.B16, V13.B16  // V13 = mask ? 0x20 : 0
+	VEOR  V13.B16, V12.B16, V10.B16 // V10 = diff with case masked out
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, vloop_scalar_2byte
@@ -2005,14 +2050,18 @@ vtail_scalar_2byte:
 
 	VLD1  (R21), [V10.B16]
 	VLD1  (R22), [V11.B16]
-	WORD  $0x3cf37a0d               // FMOVQ (R16)(R19<<4), F13
+	WORD  $0x3cf37b0d               // FMOVQ (R24)(R19<<4), F13
 
-	VADD  V4.B16, V10.B16, V12.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	WORD  $0x6e2c34ec               // VCMHI V12.B16, V7.B16, V12.B16
-	VAND  V8.B16, V12.B16, V12.B16
-	VEOR  V12.B16, V10.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16
+	// Case-insensitive compare (with XOR==0x20 check)
+	VEOR  V10.B16, V11.B16, V12.B16 // V12 = XOR diff
+	VCMEQ V8.B16, V12.B16, V14.B16  // V14 = (XOR == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V15.B16  // V15 = h | 0x20
+	VADD  V4.B16, V15.B16, V15.B16  // V15 = (h|0x20) + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is letter)
+	VAND  V14.B16, V15.B16, V15.B16 // V15 = (XOR==0x20 && is_letter) ? 0xFF : 0
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = mask ? 0x20 : 0
+	VEOR  V15.B16, V12.B16, V10.B16 // V10 = diff with case masked out
+	VAND  V13.B16, V10.B16, V10.B16 // mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, scalar_next_2byte
