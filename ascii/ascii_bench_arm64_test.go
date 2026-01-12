@@ -268,4 +268,44 @@ func BenchmarkNonLetterNeedle(b *testing.B) {
 	}
 }
 
+// BenchmarkCaseSensitive compares case-sensitive search variants.
+func BenchmarkCaseSensitive(b *testing.B) {
+	sizes := []struct {
+		name string
+		size int
+	}{
+		{"1KB", 1024},
+		{"64KB", 64 * 1024},
+		{"1MB", 1024 * 1024},
+	}
+
+	needleStr := "xylophone"
+	needle := MakeNeedle(needleStr)
+
+	for _, s := range sizes {
+		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24) + needleStr
+
+		b.Run(s.name+"/strings.Index", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = strings.Index(haystack, needleStr)
+			}
+		})
+
+		b.Run(s.name+"/Index", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = Index(haystack, needleStr)
+			}
+		})
+
+		b.Run(s.name+"/SearchNeedleExact", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = SearchNeedleExact(haystack, needle)
+			}
+		})
+	}
+}
+
 

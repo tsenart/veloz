@@ -948,6 +948,87 @@ func TestSearchNeedle(t *testing.T) {
 	}
 }
 
+// TestIndex tests the case-sensitive Index function.
+func TestIndex(t *testing.T) {
+	tests := []struct {
+		haystack, needle string
+		want             int
+	}{
+		{"", "", 0},
+		{"", "a", -1},
+		{"a", "", 0},
+		{"abc", "a", 0},
+		{"abc", "A", -1}, // case-sensitive: 'A' not found
+		{"abc", "b", 1},
+		{"abc", "B", -1}, // case-sensitive
+		{"abc", "c", 2},
+		{"abc", "d", -1},
+		{"hello world", "world", 6},
+		{"Hello World", "hello", -1}, // case-sensitive: 'hello' not found
+		{"Hello World", "Hello", 0},
+		{"The Quick Brown Fox", "Quick", 4},
+		{"The Quick Brown Fox", "quick", -1}, // case-sensitive
+		{"The Quick Brown Fox", "Fox", 16},
+		{"The Quick Brown Fox", "xyz", -1},
+		// Test rare byte selection
+		{"abcdefghijklmnopqrstuvwxyz", "qrs", 16},
+		{"abcdefghijklmnopqrstuvwxyz", "xyz", 23},
+		// Longer strings
+		{strings.Repeat("a", 100) + "NEEDLE" + strings.Repeat("b", 100), "NEEDLE", 100},
+		{strings.Repeat("a", 100) + "NEEDLE" + strings.Repeat("b", 100), "needle", -1}, // case-sensitive
+		{strings.Repeat("x", 1000) + "QuIcK", "QuIcK", 1000},
+		{strings.Repeat("x", 1000) + "QuIcK", "quick", -1}, // case-sensitive
+		// Edge cases
+		{strings.Repeat("x", 20) + "needle", "needle", 20},
+		{strings.Repeat("x", 17) + "QZ", "QZ", 17},
+		{strings.Repeat("x", 25) + "abc", "abc", 25},
+		{strings.Repeat("y", 31) + "z", "z", 31},
+	}
+
+	for _, tt := range tests {
+		if got := Index(tt.haystack, tt.needle); got != tt.want {
+			t.Errorf("Index(%q, %q) = %d, want %d", tt.haystack, tt.needle, got, tt.want)
+		}
+	}
+}
+
+// TestSearchNeedleExact tests the case-sensitive SearchNeedleExact function.
+func TestSearchNeedleExact(t *testing.T) {
+	tests := []struct {
+		haystack, needle string
+		want             int
+	}{
+		{"", "", 0},
+		{"", "a", -1},
+		{"a", "", 0},
+		{"abc", "a", 0},
+		{"abc", "A", -1}, // case-sensitive
+		{"abc", "b", 1},
+		{"abc", "B", -1}, // case-sensitive
+		{"hello world", "world", 6},
+		{"Hello World", "hello", -1}, // case-sensitive
+		{"Hello World", "Hello", 0},
+		{"The Quick Brown Fox", "Quick", 4},
+		{"The Quick Brown Fox", "quick", -1}, // case-sensitive
+		// Longer strings
+		{strings.Repeat("a", 100) + "NEEDLE" + strings.Repeat("b", 100), "NEEDLE", 100},
+		{strings.Repeat("a", 100) + "NEEDLE" + strings.Repeat("b", 100), "needle", -1},
+		{strings.Repeat("x", 1000) + "QuIcK", "QuIcK", 1000},
+		{strings.Repeat("x", 1000) + "QuIcK", "quick", -1},
+	}
+
+	for _, tt := range tests {
+		n := MakeNeedle(tt.needle)
+		if got := SearchNeedleExact(tt.haystack, n); got != tt.want {
+			t.Errorf("SearchNeedleExact(%q, %q) = %d, want %d", tt.haystack, tt.needle, got, tt.want)
+		}
+		// Verify against Index
+		if want := Index(tt.haystack, tt.needle); want != tt.want {
+			t.Errorf("Index(%q, %q) = %d, want %d (mismatch with SearchNeedleExact)", tt.haystack, tt.needle, want, tt.want)
+		}
+	}
+}
+
 func TestAdaptive(t *testing.T) {
 	tests := []struct {
 		haystack, needle string
@@ -1643,6 +1724,38 @@ func FuzzSearchNeedle(f *testing.F) {
 		if got != ifRes {
 			t.Fatalf("SearchNeedle vs IndexFold mismatch: SearchNeedle(%q, %q) = %d, IndexFold = %d",
 				haystack, needle, got, ifRes)
+		}
+	})
+}
+
+// FuzzIndex tests case-sensitive Index against strings.Index
+func FuzzIndex(f *testing.F) {
+	f.Add("hello world", "world")
+	f.Add("The Quick Brown Fox", "Quick")
+	f.Add(strings.Repeat("a", 100), "aaa")
+	f.Add("xylophone", "xy")
+	f.Add("Hello World", "Hello")
+	f.Add("NEEDLE in haystack", "NEEDLE")
+	// Mixed case - should NOT match
+	f.Add("hello world", "WORLD")
+	f.Add("HELLO WORLD", "hello")
+	// Edge cases
+	f.Add(strings.Repeat("x", 20)+"needle", "needle")
+	f.Add(strings.Repeat("x", 17)+"QZ", "QZ")
+	f.Add(strings.Repeat("y", 31)+"z", "z")
+
+	f.Fuzz(func(t *testing.T, haystack, needle string) {
+		got := Index(haystack, needle)
+		want := strings.Index(haystack, needle)
+		if got != want {
+			t.Fatalf("Index(%q, %q) = %d, want %d", haystack, needle, got, want)
+		}
+		// Cross-validate with SearchNeedleExact
+		n := MakeNeedle(needle)
+		sneGot := SearchNeedleExact(haystack, n)
+		if got != sneGot {
+			t.Fatalf("Index vs SearchNeedleExact mismatch: Index(%q, %q) = %d, SearchNeedleExact = %d",
+				haystack, needle, got, sneGot)
 		}
 	})
 }

@@ -102,7 +102,27 @@ func Index(haystack, needle string) int {
 	if len(haystack) < len(needle) {
 		return -1
 	}
-	// O(1) rare byte selection
-	rare1, off1, rare2, off2 := selectRarePair(needle, nil)
+	// O(1) rare byte selection (returns lowercase bytes, but we need offsets)
+	_, off1, _, off2 := selectRarePair(needle, nil)
+	// For case-sensitive search, use original bytes at those offsets
+	rare1 := needle[off1]
+	rare2 := needle[off2]
 	return IndexNEON(haystack, rare1, off1, rare2, off2, needle)
+}
+
+// SearchNeedleExact finds the first case-sensitive match of the precomputed needle in haystack.
+// For repeated searches with the same needle, this is faster than Index
+// because the rare byte offsets are pre-computed.
+func SearchNeedleExact(haystack string, n Needle) int {
+	if len(n.raw) == 0 {
+		return 0
+	}
+	if len(haystack) < len(n.raw) {
+		return -1
+	}
+	// Get original-case rare bytes from raw needle (n.rare1/rare2 are lowercase)
+	rare1 := n.raw[n.off1]
+	rare2 := n.raw[n.off2]
+	// Use raw needle for exact matching
+	return IndexNEON(haystack, rare1, n.off1, rare2, n.off2, n.raw)
 }

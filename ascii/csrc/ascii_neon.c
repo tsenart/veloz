@@ -1542,44 +1542,45 @@ setup_2byte_mode:;                                                             \
 }
 
 // =============================================================================
-// Macro instantiations - generate 4 optimized implementations
+// Macro instantiations - generate internal implementations
 // =============================================================================
 
-// Generate the actual implementations (no gocc comments - these are internal)
-INDEX_IMPL(index_needle_exact_impl, 0, equal_exact)
-INDEX_IMPL(index_needle_fold_both_impl, 1, equal_fold_both)
-INDEX_IMPL(search_needle_fold_norm_impl, 1, equal_fold_normalized)
+// Internal implementations (static to avoid symbol conflicts)
+static INDEX_IMPL(index_needle_exact_impl, 0, equal_exact)
+static INDEX_IMPL(index_needle_fold_both_impl, 1, equal_fold_both)
+static INDEX_IMPL(search_needle_fold_norm_impl, 1, equal_fold_normalized)
 
 // =============================================================================
 // Wrapper functions for gocc (these have the gocc comments gocc needs)
 // =============================================================================
+// Use volatile to prevent tail-call optimization which breaks gocc label handling
 
 // Case-sensitive search (no folding) - for Index
 // gocc: IndexNEON(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int
-__attribute__((noinline))
 int64_t index_neon(unsigned char *haystack, int64_t haystack_len,
     uint8_t rare1, int64_t off1, uint8_t rare2, int64_t off2,
     unsigned char *needle, int64_t needle_len)
 {
-    return index_needle_exact_impl(haystack, haystack_len, rare1, off1, rare2, off2, needle, needle_len);
+    volatile int64_t result = index_needle_exact_impl(haystack, haystack_len, rare1, off1, rare2, off2, needle, needle_len);
+    return result;
 }
 
 // Case-insensitive search (fold on-the-fly) - for IndexFold
 // gocc: indexFoldNEONC(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int
-__attribute__((noinline))
 int64_t index_fold_neon_c(unsigned char *haystack, int64_t haystack_len,
     uint8_t rare1, int64_t off1, uint8_t rare2, int64_t off2,
     unsigned char *needle, int64_t needle_len)
 {
-    return index_needle_fold_both_impl(haystack, haystack_len, rare1, off1, rare2, off2, needle, needle_len);
+    volatile int64_t result = index_needle_fold_both_impl(haystack, haystack_len, rare1, off1, rare2, off2, needle, needle_len);
+    return result;
 }
 
 // Case-insensitive search (pre-normalized needle) - for Searcher.IndexFold / SearchNeedle
 // gocc: SearchNeedleFold(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int
-__attribute__((noinline))
 int64_t search_needle_fold(unsigned char *haystack, int64_t haystack_len,
     uint8_t rare1, int64_t off1, uint8_t rare2, int64_t off2,
     unsigned char *needle, int64_t needle_len)
 {
-    return search_needle_fold_norm_impl(haystack, haystack_len, rare1, off1, rare2, off2, needle, needle_len);
+    volatile int64_t result = search_needle_fold_norm_impl(haystack, haystack_len, rare1, off1, rare2, off2, needle, needle_len);
+    return result;
 }
