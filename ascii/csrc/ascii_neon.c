@@ -848,10 +848,16 @@ static inline uint8x16_t normalize_lower(uint8x16_t v) {
     return vorrq_u8(v, vandq_u8(is_upper, flip));
 }
 
+// =============================================================================
+// Verification functions for different search modes
+// =============================================================================
+// All take haystack_remaining to support safe loading near end of haystack.
+// This enables SIMD search for all needle sizes (including ≤16 bytes).
+
 // Compare haystack against pre-normalized (lowercase) needle, return true if equal
 // IMPORTANT: 'b' (norm_needle) is already lowercase, so we only normalize 'a' (haystack)
-static inline bool equal_fold_normalized(const unsigned char *a, const unsigned char *b, int64_t len) {
-    while (len >= 16) {
+static inline bool equal_fold_normalized(const unsigned char *a, const unsigned char *b, int64_t len, int64_t haystack_remaining) {
+    while (len >= 16 && haystack_remaining >= 16) {
         uint8x16_t va = normalize_lower(vld1q_u8(a));
         uint8x16_t vb = vld1q_u8(b);  // b is already normalized - don't waste ops!
         uint8x16_t diff = veorq_u8(va, vb);
@@ -859,10 +865,12 @@ static inline bool equal_fold_normalized(const unsigned char *a, const unsigned 
         a += 16;
         b += 16;
         len -= 16;
+        haystack_remaining -= 16;
     }
     if (len > 0) {
         uint8x16_t mask = vld1q_u8(tail_mask_table[len]);
-        uint8x16_t va = vandq_u8(normalize_lower(vld1q_u8(a)), mask);
+        uint8x16_t va = (haystack_remaining >= 16) ? vld1q_u8(a) : load_data16(a, haystack_remaining);
+        va = vandq_u8(normalize_lower(va), mask);
         uint8x16_t vb = vandq_u8(vld1q_u8(b), mask);  // b is already normalized
         uint8x16_t diff = veorq_u8(va, vb);
         if (vmaxvq_u8(diff)) return false;
@@ -870,14 +878,10 @@ static inline bool equal_fold_normalized(const unsigned char *a, const unsigned 
     return true;
 }
 
-// =============================================================================
-// Verification functions for different search modes
-// =============================================================================
-
 // Case-sensitive exact comparison using SIMD
 // For Index and Searcher.Index (no folding)
-static inline bool equal_exact(const unsigned char *a, const unsigned char *b, int64_t len) {
-    while (len >= 16) {
+static inline bool equal_exact(const unsigned char *a, const unsigned char *b, int64_t len, int64_t haystack_remaining) {
+    while (len >= 16 && haystack_remaining >= 16) {
         uint8x16_t va = vld1q_u8(a);
         uint8x16_t vb = vld1q_u8(b);
         uint8x16_t diff = veorq_u8(va, vb);
@@ -885,10 +889,12 @@ static inline bool equal_exact(const unsigned char *a, const unsigned char *b, i
         a += 16;
         b += 16;
         len -= 16;
+        haystack_remaining -= 16;
     }
     if (len > 0) {
         uint8x16_t mask = vld1q_u8(tail_mask_table[len]);
-        uint8x16_t va = vandq_u8(vld1q_u8(a), mask);
+        uint8x16_t va = (haystack_remaining >= 16) ? vld1q_u8(a) : load_data16(a, haystack_remaining);
+        va = vandq_u8(va, mask);
         uint8x16_t vb = vandq_u8(vld1q_u8(b), mask);
         uint8x16_t diff = veorq_u8(va, vb);
         if (vmaxvq_u8(diff)) return false;
@@ -898,12 +904,12 @@ static inline bool equal_exact(const unsigned char *a, const unsigned char *b, i
 
 // Compare haystack against un-normalized needle using XOR + letter detection
 // For IndexFold where needle is not pre-normalized
-static inline bool equal_fold_both(const unsigned char *a, const unsigned char *b, int64_t len) {
+static inline bool equal_fold_both(const unsigned char *a, const unsigned char *b, int64_t len, int64_t haystack_remaining) {
     const uint8x16_t v_159 = vdupq_n_u8(159);  // -97 as unsigned
     const uint8x16_t v_26 = vdupq_n_u8(26);
     const uint8x16_t v_32 = vdupq_n_u8(0x20);
     
-    while (len >= 16) {
+    while (len >= 16 && haystack_remaining >= 16) {
         uint8x16_t va = vld1q_u8(a);
         uint8x16_t vb = vld1q_u8(b);
         
@@ -924,10 +930,11 @@ static inline bool equal_fold_both(const unsigned char *a, const unsigned char *
         a += 16;
         b += 16;
         len -= 16;
+        haystack_remaining -= 16;
     }
     if (len > 0) {
         uint8x16_t mask = vld1q_u8(tail_mask_table[len]);
-        uint8x16_t va = vld1q_u8(a);
+        uint8x16_t va = (haystack_remaining >= 16) ? vld1q_u8(a) : load_data16(a, haystack_remaining);
         uint8x16_t vb = vld1q_u8(b);
         
         uint8x16_t diff = veorq_u8(va, vb);
@@ -977,7 +984,7 @@ int64_t func_name( \
     /* Setup rare1 mask and target */                                          \
     /* FILTER_FOLD=1: OR 0x20 for letters to case-fold */                      \
     /* FILTER_FOLD=0: always 0x00 (exact match) */                             \
-    const bool rare1_is_letter = FILTER_FOLD && (rare1 - 'a') < 26;            \
+    const bool rare1_is_letter = FILTER_FOLD && (unsigned)(rare1 - 'a') < 26; \
     const uint8_t rare1_mask = rare1_is_letter ? 0x20 : 0x00;                  \
     const uint8_t rare1_target = rare1;                                        \
                                                                                \
@@ -1083,11 +1090,12 @@ loop128_letter:                                                                \
                                                                                \
                         /* Vectorized verification using XOR + letter detection */ \
                         int64_t n_remaining = needle_len;                      \
+                        int64_t h_remaining = haystack_len - pos_in_search;    \
                         unsigned char *h_ptr = candidate;                      \
                         unsigned char *n_ptr = needle;                         \
                         bool match = true;                                     \
                                                                                \
-                        while (n_remaining >= 16) {                            \
+                        while (n_remaining >= 16 && h_remaining >= 16) {       \
                             uint8x16_t h = vld1q_u8(h_ptr);                    \
                             uint8x16_t n = vld1q_u8(n_ptr);                    \
                                                                                \
@@ -1111,12 +1119,13 @@ loop128_letter:                                                                \
                             h_ptr += 16;                                       \
                             n_ptr += 16;                                       \
                             n_remaining -= 16;                                 \
+                            h_remaining -= 16;                                 \
                         }                                                      \
                                                                                \
-                        /* Handle tail with mask */                            \
+                        /* Handle tail with mask and safe loading */           \
                         if (match && n_remaining > 0) {                        \
                             uint8x16_t tail_m = vld1q_u8(tail_mask_table[n_remaining]); \
-                            uint8x16_t h = vld1q_u8(h_ptr);                    \
+                            uint8x16_t h = (h_remaining >= 16) ? vld1q_u8(h_ptr) : load_data16(h_ptr, h_remaining); \
                             uint8x16_t n = vld1q_u8(n_ptr);                    \
                             uint8x16_t diff = veorq_u8(h, n);                  \
                             uint8x16_t is_case_diff = vceqq_u8(diff, v_32);    \
@@ -1181,7 +1190,7 @@ loop32_letter:                                                                 \
                                                                                \
                 if (pos_in_search <= search_len - 1) {                         \
                     unsigned char *candidate = haystack + pos_in_search;       \
-                    if (VERIFY_FN(candidate, needle, needle_len)) {            \
+                    if (VERIFY_FN(candidate, needle, needle_len, haystack_len - pos_in_search)) { \
                         return pos_in_search;                                  \
                     }                                                          \
                     failures++;                                                \
@@ -1217,7 +1226,7 @@ loop16_letter:                                                                 \
             int64_t pos_in_search = (search_ptr - 16 - search_start) + byte_pos; \
                                                                                \
             if (pos_in_search <= search_len - 1) {                             \
-                if (VERIFY_FN(haystack + pos_in_search, needle, needle_len)) { \
+                if (VERIFY_FN(haystack + pos_in_search, needle, needle_len, haystack_len - pos_in_search)) { \
                     return pos_in_search;                                      \
                 }                                                              \
                 failures++;                                                    \
@@ -1240,7 +1249,7 @@ scalar_letter:                                                                 \
         if ((c | rare1_mask) == rare1_target) {                                \
             int64_t pos_in_search = search_ptr - search_start;                 \
             if (pos_in_search <= search_len - 1) {                             \
-                if (VERIFY_FN(haystack + pos_in_search, needle, needle_len)) { \
+                if (VERIFY_FN(haystack + pos_in_search, needle, needle_len, haystack_len - pos_in_search)) { \
                     return pos_in_search;                                      \
                 }                                                              \
                 failures++;                                                    \
@@ -1304,7 +1313,7 @@ loop128_nonletter:                                                             \
                 int64_t pos_in_search = (search_ptr - 128 - search_start) + (c * 16) + byte_pos; \
                                                                                \
                 if (pos_in_search <= search_len - 1) {                         \
-                    if (VERIFY_FN(haystack + pos_in_search, needle, needle_len)) { \
+                    if (VERIFY_FN(haystack + pos_in_search, needle, needle_len, haystack_len - pos_in_search)) { \
                         return pos_in_search;                                  \
                     }                                                          \
                     failures++;                                                \
@@ -1349,7 +1358,7 @@ loop32_nonletter:                                                              \
                 int64_t pos_in_search = (search_ptr - 32 - search_start) + (c * 16) + byte_pos; \
                                                                                \
                 if (pos_in_search <= search_len - 1) {                         \
-                    if (VERIFY_FN(haystack + pos_in_search, needle, needle_len)) { \
+                    if (VERIFY_FN(haystack + pos_in_search, needle, needle_len, haystack_len - pos_in_search)) { \
                         return pos_in_search;                                  \
                     }                                                          \
                     failures++;                                                \
@@ -1384,7 +1393,7 @@ loop16_nonletter:                                                              \
             int64_t pos_in_search = (search_ptr - 16 - search_start) + byte_pos; \
                                                                                \
             if (pos_in_search <= search_len - 1) {                             \
-                if (VERIFY_FN(haystack + pos_in_search, needle, needle_len)) { \
+                if (VERIFY_FN(haystack + pos_in_search, needle, needle_len, haystack_len - pos_in_search)) { \
                     return pos_in_search;                                      \
                 }                                                              \
                 failures++;                                                    \
@@ -1403,7 +1412,7 @@ loop16_nonletter:                                                              \
         if (*search_ptr == rare1_target) {                                     \
             int64_t pos_in_search = search_ptr - search_start;                 \
             if (pos_in_search <= search_len - 1) {                             \
-                if (VERIFY_FN(haystack + pos_in_search, needle, needle_len)) { \
+                if (VERIFY_FN(haystack + pos_in_search, needle, needle_len, haystack_len - pos_in_search)) { \
                     return pos_in_search;                                      \
                 }                                                              \
             }                                                                  \
@@ -1419,7 +1428,7 @@ loop16_nonletter:                                                              \
                                                                                \
 setup_2byte_mode:;                                                             \
     /* Setup rare2 mask and target - also respects FILTER_FOLD */              \
-    const bool rare2_is_letter = FILTER_FOLD && (rare2 - 'a') < 26;            \
+    const bool rare2_is_letter = FILTER_FOLD && (unsigned)(rare2 - 'a') < 26; \
     const uint8_t rare2_mask = rare2_is_letter ? 0x20 : 0x00;                  \
     const uint8_t rare2_target = rare2;                                        \
                                                                                \
@@ -1482,7 +1491,7 @@ setup_2byte_mode:;                                                             \
                 int64_t pos_in_search = search_pos + (c * 16) + byte_pos;      \
                                                                                \
                 if (pos_in_search <= search_len - 1) {                         \
-                    if (VERIFY_FN(haystack + pos_in_search, needle, needle_len)) { \
+                    if (VERIFY_FN(haystack + pos_in_search, needle, needle_len, haystack_len - pos_in_search)) { \
                         return pos_in_search;                                  \
                     }                                                          \
                 }                                                              \
@@ -1516,7 +1525,7 @@ setup_2byte_mode:;                                                             \
             int64_t pos_in_search = (search_pos - 16) + 16 + byte_pos;         \
                                                                                \
             if (pos_in_search <= search_len - 1) {                             \
-                if (VERIFY_FN(haystack + pos_in_search, needle, needle_len)) { \
+                if (VERIFY_FN(haystack + pos_in_search, needle, needle_len, haystack_len - pos_in_search)) { \
                     return pos_in_search;                                      \
                 }                                                              \
             }                                                                  \
@@ -1534,7 +1543,7 @@ setup_2byte_mode:;                                                             \
                                                                                \
         if ((c1 | rare1_mask) == rare1_target && (c2 | rare2_mask) == rare2_target) { \
             if (search_pos <= search_len - 1) {                                \
-                if (VERIFY_FN(haystack + search_pos, needle, needle_len)) {    \
+                if (VERIFY_FN(haystack + search_pos, needle, needle_len, haystack_len - search_pos)) { \
                     return search_pos;                                         \
                 }                                                              \
             }                                                                  \

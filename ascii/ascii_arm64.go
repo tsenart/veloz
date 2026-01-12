@@ -2,8 +2,6 @@
 
 package ascii
 
-import "strings"
-
 
 
 // CharSet represents a precomputed character set for fast IndexAny lookups.
@@ -77,11 +75,6 @@ func IndexFold(haystack, needle string) int {
 	if len(haystack) < len(needle) {
 		return -1
 	}
-	// SIMD verification reads 16 bytes at a time, unsafe for unpadded strings
-	// Fall back to Go for needles where SIMD tail handling could overread
-	if len(needle) <= 32 {
-		return indexFoldGo(haystack, needle)
-	}
 	// O(1) rare byte selection
 	rare1, off1, rare2, off2 := selectRarePair(needle, nil)
 	// Pass original needle - C code folds on-the-fly during verification (no alloc)
@@ -110,10 +103,6 @@ func Index(haystack, needle string) int {
 	}
 	if len(haystack) < len(needle) {
 		return -1
-	}
-	// SIMD verification reads 16 bytes at a time, unsafe for unpadded strings
-	if len(needle) <= 32 {
-		return strings.Index(haystack, needle)
 	}
 	// O(1) rare byte selection (returns lowercase bytes, but we need offsets)
 	_, off1, _, off2 := selectRarePair(needle, nil)
