@@ -412,7 +412,7 @@ bool equal_fold(unsigned char *a, uint64_t a_len, unsigned char *b, uint64_t b_l
 }
 
 // loads up to 16 bytes of data into a 128-bit register
-static inline uint8x16_t load_data16(const unsigned char *src, int64_t len) {
+__attribute__((always_inline)) static inline uint8x16_t load_data16(const unsigned char *src, int64_t len) {
     if (len >= 16) {
         return vld1q_u8(src);
     } else if (len == 8) {
@@ -856,7 +856,7 @@ static inline uint8x16_t normalize_lower(uint8x16_t v) {
 
 // Compare haystack against pre-normalized (lowercase) needle, return true if equal
 // IMPORTANT: 'b' (norm_needle) is already lowercase, so we only normalize 'a' (haystack)
-static inline bool equal_fold_normalized(const unsigned char *a, const unsigned char *b, int64_t len, int64_t haystack_remaining) {
+__attribute__((always_inline)) static inline bool equal_fold_normalized(const unsigned char *a, const unsigned char *b, int64_t len, int64_t haystack_remaining) {
     while (len >= 16 && haystack_remaining >= 16) {
         uint8x16_t va = normalize_lower(vld1q_u8(a));
         uint8x16_t vb = vld1q_u8(b);  // b is already normalized - don't waste ops!
@@ -880,7 +880,7 @@ static inline bool equal_fold_normalized(const unsigned char *a, const unsigned 
 
 // Case-sensitive exact comparison using SIMD
 // For Index and Searcher.Index (no folding)
-static inline bool equal_exact(const unsigned char *a, const unsigned char *b, int64_t len, int64_t haystack_remaining) {
+__attribute__((always_inline)) static inline bool equal_exact(const unsigned char *a, const unsigned char *b, int64_t len, int64_t haystack_remaining) {
     while (len >= 16 && haystack_remaining >= 16) {
         uint8x16_t va = vld1q_u8(a);
         uint8x16_t vb = vld1q_u8(b);
@@ -904,7 +904,7 @@ static inline bool equal_exact(const unsigned char *a, const unsigned char *b, i
 
 // Compare haystack against un-normalized needle using XOR + letter detection
 // For IndexFold where needle is not pre-normalized
-static inline bool equal_fold_both(const unsigned char *a, const unsigned char *b, int64_t len, int64_t haystack_remaining) {
+__attribute__((always_inline)) static inline bool equal_fold_both(const unsigned char *a, const unsigned char *b, int64_t len, int64_t haystack_remaining) {
     const uint8x16_t v_159 = vdupq_n_u8(159);  // -97 as unsigned
     const uint8x16_t v_26 = vdupq_n_u8(26);
     const uint8x16_t v_32 = vdupq_n_u8(0x20);
@@ -959,6 +959,9 @@ static inline bool equal_fold_both(const unsigned char *a, const unsigned char *
 // 3. Tiered loop structure (128-byte, 32-byte, 16-byte, scalar)
 // 4. Syndrome extraction with magic constant 0x4010040140100401
 // 5. Parameterized verification function
+// 6. NO POINTER ARRAYS - all chunk processing is explicit/unrolled
+// 7. vld1q_u8_x4 for 64-byte batched loads
+// 8. 64-byte block early exit like handwritten ASM
 //
 // Four entry points via macro instantiation:
 // - FILTER_FOLD=0, VERIFY=equal_exact:          Index (case-sensitive, single call)
@@ -969,8 +972,44 @@ static inline bool equal_fold_both(const unsigned char *a, const unsigned char *
 // FILTER_FOLD: 0 = exact matching, 1 = case-folding with OR 0x20
 // VERIFY_FN: verification function (equal_exact, equal_fold_both, equal_fold_normalized)
 
+// Helper: Extract 32-bit syndrome from match vector using magic constant
+__attribute__((always_inline)) static inline uint32_t extract_syndrome(uint8x16_t match_vec, uint8x16_t magic_vec) {
+    uint8x16_t masked = vandq_u8(match_vec, magic_vec);
+    uint8x8_t sum1 = vpadd_u8(vget_low_u8(masked), vget_high_u8(masked));
+    uint8x8_t sum2 = vpadd_u8(sum1, sum1);
+    return vget_lane_u32(vreinterpret_u32_u8(sum2), 0);
+}
+
+// Helper: Process all matches in a syndrome for a single chunk
+// Returns 1 if found match, 0 to continue, -1 to switch to 2-byte mode
+#define PROCESS_SYNDROME_INLINE(syndrome, chunk_offset, ptr_before_load, load_size, \
+    search_start, search_len, haystack, haystack_len, needle, needle_len, \
+    failures, VERIFY_FN) \
+do { \
+    uint32_t _syn = (syndrome); \
+    while (_syn) { \
+        int _bit_pos = __builtin_ctz(_syn); \
+        int _byte_pos = _bit_pos >> 1; \
+        int64_t _pos = ((ptr_before_load) - (search_start)) + (chunk_offset) + _byte_pos; \
+        if (_pos <= (search_len) - 1) { \
+            if (VERIFY_FN((haystack) + _pos, (needle), (needle_len), (haystack_len) - _pos)) { \
+                return _pos; \
+            } \
+            (failures)++; \
+            int64_t _bytes_scanned = (ptr_before_load) + (load_size) - (search_start); \
+            if ((failures) > 4 + (_bytes_scanned >> 8)) { \
+                search_ptr = (ptr_before_load); \
+                remaining += (load_size); \
+                goto setup_2byte_mode; \
+            } \
+        } \
+        int _clear_pos = (_byte_pos + 1) << 1; \
+        _syn &= ~((1U << _clear_pos) - 1); \
+    } \
+} while(0)
+
 #define INDEX_IMPL(func_name, FILTER_FOLD, VERIFY_FN) \
-int64_t func_name( \
+__attribute__((always_inline)) static inline int64_t func_name( \
     unsigned char *haystack, int64_t haystack_len, \
     uint8_t rare1, int64_t off1, \
     uint8_t rare2, int64_t off2, \
@@ -1024,139 +1063,64 @@ int64_t func_name( \
                                                                                \
 loop128_letter:                                                                \
     while (remaining >= 128 && search_ptr + 128 <= data_end) {                 \
-        /* Load 128 bytes (8 x 16-byte vectors) */                             \
-        uint8x16_t d0 = vld1q_u8(search_ptr);                                  \
-        uint8x16_t d1 = vld1q_u8(search_ptr + 16);                             \
-        uint8x16_t d2 = vld1q_u8(search_ptr + 32);                             \
-        uint8x16_t d3 = vld1q_u8(search_ptr + 48);                             \
-        uint8x16_t d4 = vld1q_u8(search_ptr + 64);                             \
-        uint8x16_t d5 = vld1q_u8(search_ptr + 80);                             \
-        uint8x16_t d6 = vld1q_u8(search_ptr + 96);                             \
-        uint8x16_t d7 = vld1q_u8(search_ptr + 112);                            \
+        /* Load 128 bytes using vld1q_u8_x4 for 64-byte batched loads */       \
+        unsigned char *ptr_before = search_ptr;                                \
+        uint8x16x4_t batch0 = vld1q_u8_x4(search_ptr);                         \
+        uint8x16x4_t batch1 = vld1q_u8_x4(search_ptr + 64);                    \
         search_ptr += 128;                                                     \
         remaining -= 128;                                                      \
                                                                                \
-        /* OR with 0x20 to force lowercase, then compare to target */          \
-        uint8x16_t m0 = vceqq_u8(vorrq_u8(d0, v_mask1), v_target1);            \
-        uint8x16_t m1 = vceqq_u8(vorrq_u8(d1, v_mask1), v_target1);            \
-        uint8x16_t m2 = vceqq_u8(vorrq_u8(d2, v_mask1), v_target1);            \
-        uint8x16_t m3 = vceqq_u8(vorrq_u8(d3, v_mask1), v_target1);            \
-        uint8x16_t m4 = vceqq_u8(vorrq_u8(d4, v_mask1), v_target1);            \
-        uint8x16_t m5 = vceqq_u8(vorrq_u8(d5, v_mask1), v_target1);            \
-        uint8x16_t m6 = vceqq_u8(vorrq_u8(d6, v_mask1), v_target1);            \
-        uint8x16_t m7 = vceqq_u8(vorrq_u8(d7, v_mask1), v_target1);            \
+        /* OR with 0x20 and compare - first 64 bytes */                        \
+        uint8x16_t m0 = vceqq_u8(vorrq_u8(batch0.val[0], v_mask1), v_target1); \
+        uint8x16_t m1 = vceqq_u8(vorrq_u8(batch0.val[1], v_mask1), v_target1); \
+        uint8x16_t m2 = vceqq_u8(vorrq_u8(batch0.val[2], v_mask1), v_target1); \
+        uint8x16_t m3 = vceqq_u8(vorrq_u8(batch0.val[3], v_mask1), v_target1); \
+        /* Second 64 bytes */                                                  \
+        uint8x16_t m4 = vceqq_u8(vorrq_u8(batch1.val[0], v_mask1), v_target1); \
+        uint8x16_t m5 = vceqq_u8(vorrq_u8(batch1.val[1], v_mask1), v_target1); \
+        uint8x16_t m6 = vceqq_u8(vorrq_u8(batch1.val[2], v_mask1), v_target1); \
+        uint8x16_t m7 = vceqq_u8(vorrq_u8(batch1.val[3], v_mask1), v_target1); \
                                                                                \
         /* OR-reduce all 8 vectors for quick "any match?" check */             \
-        uint8x16_t any01 = vorrq_u8(m0, m1);                                   \
-        uint8x16_t any23 = vorrq_u8(m2, m3);                                   \
-        uint8x16_t any45 = vorrq_u8(m4, m5);                                   \
-        uint8x16_t any67 = vorrq_u8(m6, m7);                                   \
-        uint8x16_t any0123 = vorrq_u8(any01, any23);                           \
-        uint8x16_t any4567 = vorrq_u8(any45, any67);                           \
+        uint8x16_t any0123 = vorrq_u8(vorrq_u8(m0, m1), vorrq_u8(m2, m3));     \
+        uint8x16_t any4567 = vorrq_u8(vorrq_u8(m4, m5), vorrq_u8(m6, m7));     \
         uint8x16_t any_all = vorrq_u8(any0123, any4567);                       \
-                                                                               \
-        /* Fast reduce: add pairwise to scalar */                              \
         uint64x2_t any64 = vpaddq_u64(vreinterpretq_u64_u8(any_all), vreinterpretq_u64_u8(any_all)); \
-        if (vgetq_lane_u64(any64, 0) == 0) continue;  /* No matches, continue */ \
+        if (vgetq_lane_u64(any64, 0) == 0) continue;                           \
                                                                                \
-        /* Process matches in first 64 bytes, then second 64 bytes */          \
-        uint8x16_t *chunks[8] = {&m0, &m1, &m2, &m3, &m4, &m5, &m6, &m7};      \
-        for (int block = 0; block < 2; block++) {                              \
-            int base_chunk = block * 4;                                        \
-            uint8x16_t block_any = vorrq_u8(                                   \
-                vorrq_u8(*chunks[base_chunk], *chunks[base_chunk+1]),          \
-                vorrq_u8(*chunks[base_chunk+2], *chunks[base_chunk+3]));       \
-            uint64x2_t block64 = vpaddq_u64(vreinterpretq_u64_u8(block_any), vreinterpretq_u64_u8(block_any)); \
-            if (vgetq_lane_u64(block64, 0) == 0) continue;                     \
-                                                                               \
-            for (int c = 0; c < 4; c++) {                                      \
-                /* Extract syndrome using magic constant + horizontal add */   \
-                uint8x16_t masked = vandq_u8(*chunks[base_chunk + c], v_magic); \
-                uint8x8_t sum1 = vpadd_u8(vget_low_u8(masked), vget_high_u8(masked)); \
-                uint8x8_t sum2 = vpadd_u8(sum1, sum1);                         \
-                uint32_t syndrome = vget_lane_u32(vreinterpret_u32_u8(sum2), 0); \
-                                                                               \
-                while (syndrome) {                                             \
-                    /* RBIT + CLZ equivalent: find first set bit from LSB */   \
-                    int bit_pos = __builtin_ctz(syndrome);                     \
-                    int byte_pos = bit_pos >> 1;  /* 2 bits per byte */        \
-                                                                               \
-                    /* Calculate haystack position */                          \
-                    int64_t chunk_offset = (block * 64) + (c * 16) + byte_pos; \
-                    int64_t pos_in_search = (search_ptr - 128 - search_start) + chunk_offset; \
-                                                                               \
-                    if (pos_in_search <= search_len - 1) {                     \
-                        unsigned char *candidate = haystack + pos_in_search;   \
-                                                                               \
-                        /* Vectorized verification using XOR + letter detection */ \
-                        int64_t n_remaining = needle_len;                      \
-                        int64_t h_remaining = haystack_len - pos_in_search;    \
-                        unsigned char *h_ptr = candidate;                      \
-                        unsigned char *n_ptr = needle;                         \
-                        bool match = true;                                     \
-                                                                               \
-                        while (n_remaining >= 16 && h_remaining >= 16) {       \
-                            uint8x16_t h = vld1q_u8(h_ptr);                    \
-                            uint8x16_t n = vld1q_u8(n_ptr);                    \
-                                                                               \
-                            /* XOR to find differences */                      \
-                            uint8x16_t diff = veorq_u8(h, n);                  \
-                            /* Check if diff == 0x20 (case difference) */      \
-                            uint8x16_t is_case_diff = vceqq_u8(diff, v_32);    \
-                            /* Check if byte is a letter: (h|0x20) + 159 < 26 */ \
-                            uint8x16_t h_lower = vorrq_u8(h, v_32);            \
-                            uint8x16_t h_minus_a = vaddq_u8(h_lower, v_159);   \
-                            uint8x16_t is_letter = vcltq_u8(h_minus_a, v_26);  \
-                            /* Mask = 0x20 if (diff==0x20 && is_letter), else 0 */ \
-                            uint8x16_t case_mask = vandq_u8(vandq_u8(is_case_diff, is_letter), v_32); \
-                            /* Apply mask to diff */                           \
-                            uint8x16_t final_diff = veorq_u8(diff, case_mask); \
-                            /* Check if any mismatch */                        \
-                            if (vmaxvq_u8(final_diff) != 0) {                  \
-                                match = false;                                 \
-                                break;                                         \
-                            }                                                  \
-                            h_ptr += 16;                                       \
-                            n_ptr += 16;                                       \
-                            n_remaining -= 16;                                 \
-                            h_remaining -= 16;                                 \
-                        }                                                      \
-                                                                               \
-                        /* Handle tail with mask and safe loading */           \
-                        if (match && n_remaining > 0) {                        \
-                            uint8x16_t tail_m = vld1q_u8(tail_mask_table[n_remaining]); \
-                            uint8x16_t h = (h_remaining >= 16) ? vld1q_u8(h_ptr) : load_data16(h_ptr, h_remaining); \
-                            uint8x16_t n = vld1q_u8(n_ptr);                    \
-                            uint8x16_t diff = veorq_u8(h, n);                  \
-                            uint8x16_t is_case_diff = vceqq_u8(diff, v_32);    \
-                            uint8x16_t h_lower = vorrq_u8(h, v_32);            \
-                            uint8x16_t h_minus_a = vaddq_u8(h_lower, v_159);   \
-                            uint8x16_t is_letter = vcltq_u8(h_minus_a, v_26);  \
-                            uint8x16_t case_mask = vandq_u8(vandq_u8(is_case_diff, is_letter), v_32); \
-                            uint8x16_t final_diff = vandq_u8(veorq_u8(diff, case_mask), tail_m); \
-                            if (vmaxvq_u8(final_diff) != 0) match = false;     \
-                        }                                                      \
-                                                                               \
-                        if (match) return pos_in_search;                       \
-                                                                               \
-                        /* Verification failed - update failure counter */     \
-                        failures++;                                            \
-                        int64_t bytes_scanned = search_ptr - search_start;     \
-                        int64_t threshold = 4 + (bytes_scanned >> 8);          \
-                        if (failures > threshold) {                            \
-                            /* Switch to 2-byte mode, back up to chunk start */ \
-                            search_ptr -= 128;                                 \
-                            remaining += 128;                                  \
-                            goto setup_2byte_mode;                             \
-                        }                                                      \
-                    }                                                          \
-                                                                               \
-                    /* Clear this bit and try next */                          \
-                    int clear_pos = (byte_pos + 1) << 1;                       \
-                    uint32_t clear_mask = (1U << clear_pos) - 1;               \
-                    syndrome &= ~clear_mask;                                   \
-                }                                                              \
-            }                                                                  \
+        /* Check first 64 bytes - early exit like ASM */                       \
+        uint64x2_t first64 = vpaddq_u64(vreinterpretq_u64_u8(any0123), vreinterpretq_u64_u8(any0123)); \
+        if (vgetq_lane_u64(first64, 0) != 0) {                                 \
+            /* Process chunks 0-3 explicitly - NO POINTER ARRAYS */            \
+            uint32_t syn0 = extract_syndrome(m0, v_magic);                     \
+            if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, ptr_before, 128,        \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn1 = extract_syndrome(m1, v_magic);                     \
+            if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn2 = extract_syndrome(m2, v_magic);                     \
+            if (syn2) PROCESS_SYNDROME_INLINE(syn2, 32, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn3 = extract_syndrome(m3, v_magic);                     \
+            if (syn3) PROCESS_SYNDROME_INLINE(syn3, 48, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+        }                                                                      \
+        /* Check second 64 bytes */                                            \
+        uint64x2_t second64 = vpaddq_u64(vreinterpretq_u64_u8(any4567), vreinterpretq_u64_u8(any4567)); \
+        if (vgetq_lane_u64(second64, 0) != 0) {                                \
+            /* Process chunks 4-7 explicitly - NO POINTER ARRAYS */            \
+            uint32_t syn4 = extract_syndrome(m4, v_magic);                     \
+            if (syn4) PROCESS_SYNDROME_INLINE(syn4, 64, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn5 = extract_syndrome(m5, v_magic);                     \
+            if (syn5) PROCESS_SYNDROME_INLINE(syn5, 80, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn6 = extract_syndrome(m6, v_magic);                     \
+            if (syn6) PROCESS_SYNDROME_INLINE(syn6, 96, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn7 = extract_syndrome(m7, v_magic);                     \
+            if (syn7) PROCESS_SYNDROME_INLINE(syn7, 112, ptr_before, 128,      \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
         }                                                                      \
     }                                                                          \
     if (remaining >= 32) goto loop32_letter;                                   \
@@ -1164,6 +1128,7 @@ loop128_letter:                                                                \
                                                                                \
 loop32_letter:                                                                 \
     while (remaining >= 32 && search_ptr + 32 <= data_end) {                   \
+        unsigned char *ptr_before = search_ptr;                                \
         uint8x16_t d0 = vld1q_u8(search_ptr);                                  \
         uint8x16_t d1 = vld1q_u8(search_ptr + 16);                             \
         search_ptr += 32;                                                      \
@@ -1176,35 +1141,13 @@ loop32_letter:                                                                 \
         uint64x2_t any64 = vpaddq_u64(vreinterpretq_u64_u8(any), vreinterpretq_u64_u8(any)); \
         if (vgetq_lane_u64(any64, 0) == 0) continue;                           \
                                                                                \
-        uint8x16_t *chunks[2] = {&m0, &m1};                                    \
-        for (int c = 0; c < 2; c++) {                                          \
-            uint8x16_t masked = vandq_u8(*chunks[c], v_magic);                 \
-            uint8x8_t sum1 = vpadd_u8(vget_low_u8(masked), vget_high_u8(masked)); \
-            uint8x8_t sum2 = vpadd_u8(sum1, sum1);                             \
-            uint32_t syndrome = vget_lane_u32(vreinterpret_u32_u8(sum2), 0);   \
-                                                                               \
-            while (syndrome) {                                                 \
-                int bit_pos = __builtin_ctz(syndrome);                         \
-                int byte_pos = bit_pos >> 1;                                   \
-                int64_t pos_in_search = (search_ptr - 32 - search_start) + (c * 16) + byte_pos; \
-                                                                               \
-                if (pos_in_search <= search_len - 1) {                         \
-                    unsigned char *candidate = haystack + pos_in_search;       \
-                    if (VERIFY_FN(candidate, needle, needle_len, haystack_len - pos_in_search)) { \
-                        return pos_in_search;                                  \
-                    }                                                          \
-                    failures++;                                                \
-                    int64_t bytes_scanned = search_ptr - search_start;         \
-                    if (failures > 4 + (bytes_scanned >> 8)) {                 \
-                        search_ptr -= 32;                                      \
-                        remaining += 32;                                       \
-                        goto setup_2byte_mode;                                 \
-                    }                                                          \
-                }                                                              \
-                int clear_pos = (byte_pos + 1) << 1;                           \
-                syndrome &= ~((1U << clear_pos) - 1);                          \
-            }                                                                  \
-        }                                                                      \
+        /* Process chunks explicitly - NO POINTER ARRAYS */                    \
+        uint32_t syn0 = extract_syndrome(m0, v_magic);                         \
+        if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, ptr_before, 32,             \
+            search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+        uint32_t syn1 = extract_syndrome(m1, v_magic);                         \
+        if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, ptr_before, 32,            \
+            search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
     }                                                                          \
     goto loop16_letter;                                                        \
                                                                                \
@@ -1274,58 +1217,63 @@ nonletter_dispatch:                                                            \
                                                                                \
 loop128_nonletter:                                                             \
     while (remaining >= 128 && search_ptr + 128 <= data_end) {                 \
-        uint8x16_t d0 = vld1q_u8(search_ptr);                                  \
-        uint8x16_t d1 = vld1q_u8(search_ptr + 16);                             \
-        uint8x16_t d2 = vld1q_u8(search_ptr + 32);                             \
-        uint8x16_t d3 = vld1q_u8(search_ptr + 48);                             \
-        uint8x16_t d4 = vld1q_u8(search_ptr + 64);                             \
-        uint8x16_t d5 = vld1q_u8(search_ptr + 80);                             \
-        uint8x16_t d6 = vld1q_u8(search_ptr + 96);                             \
-        uint8x16_t d7 = vld1q_u8(search_ptr + 112);                            \
+        /* Load 128 bytes using vld1q_u8_x4 for 64-byte batched loads */       \
+        unsigned char *ptr_before = search_ptr;                                \
+        uint8x16x4_t batch0 = vld1q_u8_x4(search_ptr);                         \
+        uint8x16x4_t batch1 = vld1q_u8_x4(search_ptr + 64);                    \
         search_ptr += 128;                                                     \
         remaining -= 128;                                                      \
                                                                                \
         /* Direct compare - no VORR needed for non-letters */                  \
-        uint8x16_t m0 = vceqq_u8(d0, v_target1);                               \
-        uint8x16_t m1 = vceqq_u8(d1, v_target1);                               \
-        uint8x16_t m2 = vceqq_u8(d2, v_target1);                               \
-        uint8x16_t m3 = vceqq_u8(d3, v_target1);                               \
-        uint8x16_t m4 = vceqq_u8(d4, v_target1);                               \
-        uint8x16_t m5 = vceqq_u8(d5, v_target1);                               \
-        uint8x16_t m6 = vceqq_u8(d6, v_target1);                               \
-        uint8x16_t m7 = vceqq_u8(d7, v_target1);                               \
+        uint8x16_t m0 = vceqq_u8(batch0.val[0], v_target1);                    \
+        uint8x16_t m1 = vceqq_u8(batch0.val[1], v_target1);                    \
+        uint8x16_t m2 = vceqq_u8(batch0.val[2], v_target1);                    \
+        uint8x16_t m3 = vceqq_u8(batch0.val[3], v_target1);                    \
+        uint8x16_t m4 = vceqq_u8(batch1.val[0], v_target1);                    \
+        uint8x16_t m5 = vceqq_u8(batch1.val[1], v_target1);                    \
+        uint8x16_t m6 = vceqq_u8(batch1.val[2], v_target1);                    \
+        uint8x16_t m7 = vceqq_u8(batch1.val[3], v_target1);                    \
                                                                                \
-        uint8x16_t any = vorrq_u8(vorrq_u8(vorrq_u8(m0, m1), vorrq_u8(m2, m3)), \
-                                   vorrq_u8(vorrq_u8(m4, m5), vorrq_u8(m6, m7))); \
-        uint64x2_t any64 = vpaddq_u64(vreinterpretq_u64_u8(any), vreinterpretq_u64_u8(any)); \
+        /* OR-reduce all 8 vectors for quick "any match?" check */             \
+        uint8x16_t any0123 = vorrq_u8(vorrq_u8(m0, m1), vorrq_u8(m2, m3));     \
+        uint8x16_t any4567 = vorrq_u8(vorrq_u8(m4, m5), vorrq_u8(m6, m7));     \
+        uint8x16_t any_all = vorrq_u8(any0123, any4567);                       \
+        uint64x2_t any64 = vpaddq_u64(vreinterpretq_u64_u8(any_all), vreinterpretq_u64_u8(any_all)); \
         if (vgetq_lane_u64(any64, 0) == 0) continue;                           \
                                                                                \
-        uint8x16_t *chunks[8] = {&m0, &m1, &m2, &m3, &m4, &m5, &m6, &m7};      \
-        for (int c = 0; c < 8; c++) {                                          \
-            uint8x16_t masked = vandq_u8(*chunks[c], v_magic);                 \
-            uint8x8_t sum1 = vpadd_u8(vget_low_u8(masked), vget_high_u8(masked)); \
-            uint8x8_t sum2 = vpadd_u8(sum1, sum1);                             \
-            uint32_t syndrome = vget_lane_u32(vreinterpret_u32_u8(sum2), 0);   \
-                                                                               \
-            while (syndrome) {                                                 \
-                int bit_pos = __builtin_ctz(syndrome);                         \
-                int byte_pos = bit_pos >> 1;                                   \
-                int64_t pos_in_search = (search_ptr - 128 - search_start) + (c * 16) + byte_pos; \
-                                                                               \
-                if (pos_in_search <= search_len - 1) {                         \
-                    if (VERIFY_FN(haystack + pos_in_search, needle, needle_len, haystack_len - pos_in_search)) { \
-                        return pos_in_search;                                  \
-                    }                                                          \
-                    failures++;                                                \
-                    if (failures > 4 + ((search_ptr - search_start) >> 8)) {   \
-                        search_ptr -= 128;                                     \
-                        remaining += 128;                                      \
-                        goto setup_2byte_mode;                                 \
-                    }                                                          \
-                }                                                              \
-                int clear_pos = (byte_pos + 1) << 1;                           \
-                syndrome &= ~((1U << clear_pos) - 1);                          \
-            }                                                                  \
+        /* Check first 64 bytes - early exit like ASM */                       \
+        uint64x2_t first64 = vpaddq_u64(vreinterpretq_u64_u8(any0123), vreinterpretq_u64_u8(any0123)); \
+        if (vgetq_lane_u64(first64, 0) != 0) {                                 \
+            /* Process chunks 0-3 explicitly - NO POINTER ARRAYS */            \
+            uint32_t syn0 = extract_syndrome(m0, v_magic);                     \
+            if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, ptr_before, 128,        \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn1 = extract_syndrome(m1, v_magic);                     \
+            if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn2 = extract_syndrome(m2, v_magic);                     \
+            if (syn2) PROCESS_SYNDROME_INLINE(syn2, 32, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn3 = extract_syndrome(m3, v_magic);                     \
+            if (syn3) PROCESS_SYNDROME_INLINE(syn3, 48, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+        }                                                                      \
+        /* Check second 64 bytes */                                            \
+        uint64x2_t second64 = vpaddq_u64(vreinterpretq_u64_u8(any4567), vreinterpretq_u64_u8(any4567)); \
+        if (vgetq_lane_u64(second64, 0) != 0) {                                \
+            /* Process chunks 4-7 explicitly - NO POINTER ARRAYS */            \
+            uint32_t syn4 = extract_syndrome(m4, v_magic);                     \
+            if (syn4) PROCESS_SYNDROME_INLINE(syn4, 64, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn5 = extract_syndrome(m5, v_magic);                     \
+            if (syn5) PROCESS_SYNDROME_INLINE(syn5, 80, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn6 = extract_syndrome(m6, v_magic);                     \
+            if (syn6) PROCESS_SYNDROME_INLINE(syn6, 96, ptr_before, 128,       \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            uint32_t syn7 = extract_syndrome(m7, v_magic);                     \
+            if (syn7) PROCESS_SYNDROME_INLINE(syn7, 112, ptr_before, 128,      \
+                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
         }                                                                      \
     }                                                                          \
     if (remaining >= 32) goto loop32_nonletter;                                \
@@ -1333,6 +1281,7 @@ loop128_nonletter:                                                             \
                                                                                \
 loop32_nonletter:                                                              \
     while (remaining >= 32 && search_ptr + 32 <= data_end) {                   \
+        unsigned char *ptr_before = search_ptr;                                \
         uint8x16_t d0 = vld1q_u8(search_ptr);                                  \
         uint8x16_t d1 = vld1q_u8(search_ptr + 16);                             \
         search_ptr += 32;                                                      \
@@ -1345,33 +1294,13 @@ loop32_nonletter:                                                              \
         uint64x2_t any64 = vpaddq_u64(vreinterpretq_u64_u8(any), vreinterpretq_u64_u8(any)); \
         if (vgetq_lane_u64(any64, 0) == 0) continue;                           \
                                                                                \
-        uint8x16_t *chunks[2] = {&m0, &m1};                                    \
-        for (int c = 0; c < 2; c++) {                                          \
-            uint8x16_t masked = vandq_u8(*chunks[c], v_magic);                 \
-            uint8x8_t sum1 = vpadd_u8(vget_low_u8(masked), vget_high_u8(masked)); \
-            uint8x8_t sum2 = vpadd_u8(sum1, sum1);                             \
-            uint32_t syndrome = vget_lane_u32(vreinterpret_u32_u8(sum2), 0);   \
-                                                                               \
-            while (syndrome) {                                                 \
-                int bit_pos = __builtin_ctz(syndrome);                         \
-                int byte_pos = bit_pos >> 1;                                   \
-                int64_t pos_in_search = (search_ptr - 32 - search_start) + (c * 16) + byte_pos; \
-                                                                               \
-                if (pos_in_search <= search_len - 1) {                         \
-                    if (VERIFY_FN(haystack + pos_in_search, needle, needle_len, haystack_len - pos_in_search)) { \
-                        return pos_in_search;                                  \
-                    }                                                          \
-                    failures++;                                                \
-                    if (failures > 4 + ((search_ptr - search_start) >> 8)) {   \
-                        search_ptr -= 32;                                      \
-                        remaining += 32;                                       \
-                        goto setup_2byte_mode;                                 \
-                    }                                                          \
-                }                                                              \
-                int clear_pos = (byte_pos + 1) << 1;                           \
-                syndrome &= ~((1U << clear_pos) - 1);                          \
-            }                                                                  \
-        }                                                                      \
+        /* Process chunks explicitly - NO POINTER ARRAYS */                    \
+        uint32_t syn0 = extract_syndrome(m0, v_magic);                         \
+        if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, ptr_before, 32,             \
+            search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+        uint32_t syn1 = extract_syndrome(m1, v_magic);                         \
+        if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, ptr_before, 32,            \
+            search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
     }                                                                          \
     goto loop16_nonletter;                                                     \
                                                                                \
@@ -1559,10 +1488,10 @@ setup_2byte_mode:;                                                             \
 // Macro instantiations - generate internal implementations
 // =============================================================================
 
-// Internal implementations (static to avoid symbol conflicts)
-static INDEX_IMPL(index_needle_exact_impl, 0, equal_exact)
-static INDEX_IMPL(index_needle_fold_both_impl, 1, equal_fold_both)
-static INDEX_IMPL(search_needle_fold_norm_impl, 1, equal_fold_normalized)
+// Internal implementations (always_inline static via macro)
+INDEX_IMPL(index_needle_exact_impl, 0, equal_exact)
+INDEX_IMPL(index_needle_fold_both_impl, 1, equal_fold_both)
+INDEX_IMPL(search_needle_fold_norm_impl, 1, equal_fold_normalized)
 
 // =============================================================================
 // Wrapper functions for gocc (these have the gocc comments gocc needs)
@@ -1571,7 +1500,7 @@ static INDEX_IMPL(search_needle_fold_norm_impl, 1, equal_fold_normalized)
 
 // Case-sensitive search (no folding) - for Index
 // gocc: IndexNEON(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int
-int64_t index_neon(unsigned char *haystack, int64_t haystack_len,
+__attribute__((noinline)) int64_t index_neon(unsigned char *haystack, int64_t haystack_len,
     uint8_t rare1, int64_t off1, uint8_t rare2, int64_t off2,
     unsigned char *needle, int64_t needle_len)
 {
@@ -1581,7 +1510,7 @@ int64_t index_neon(unsigned char *haystack, int64_t haystack_len,
 
 // Case-insensitive search (fold on-the-fly) - for IndexFold
 // gocc: indexFoldNEONC(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int
-int64_t index_fold_neon_c(unsigned char *haystack, int64_t haystack_len,
+__attribute__((noinline)) int64_t index_fold_neon_c(unsigned char *haystack, int64_t haystack_len,
     uint8_t rare1, int64_t off1, uint8_t rare2, int64_t off2,
     unsigned char *needle, int64_t needle_len)
 {
@@ -1591,7 +1520,7 @@ int64_t index_fold_neon_c(unsigned char *haystack, int64_t haystack_len,
 
 // Case-insensitive search (pre-normalized needle) - for Searcher.IndexFold / SearchNeedle
 // gocc: SearchNeedleFold(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int
-int64_t search_needle_fold(unsigned char *haystack, int64_t haystack_len,
+__attribute__((noinline)) int64_t search_needle_fold(unsigned char *haystack, int64_t haystack_len,
     uint8_t rare1, int64_t off1, uint8_t rare2, int64_t off2,
     unsigned char *needle, int64_t needle_len)
 {

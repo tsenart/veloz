@@ -301,4 +301,77 @@ func BenchmarkCaseSensitive(b *testing.B) {
 	}
 }
 
+// BenchmarkCaseSensitiveFair uses a needle where first byte IS in haystack.
+// This makes strings.Index do similar work (scanning with false positives).
+func BenchmarkCaseSensitiveFair(b *testing.B) {
+	sizes := []struct {
+		name string
+		size int
+	}{
+		{"1KB", 1024},
+		{"64KB", 64 * 1024},
+		{"1MB", 1024 * 1024},
+	}
+
+	// "elephant" starts with 'e' which IS in the haystack pattern.
+	// Both strings.Index and Searcher will have false positives to handle.
+	needleStr := "elephant"
+	needle := NewSearcher(needleStr, true) // case-sensitive
+
+	for _, s := range sizes {
+		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24) + needleStr
+
+		b.Run(s.name+"/strings.Index", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = strings.Index(haystack, needleStr)
+			}
+		})
+
+		b.Run(s.name+"/Searcher.Index", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = needle.Index(haystack)
+			}
+		})
+	}
+}
+
+// BenchmarkCaseSensitiveNoMatch tests pure scan (no match in haystack).
+// Uses needle with first byte NOT in haystack for apples-to-apples comparison.
+func BenchmarkCaseSensitiveNoMatch(b *testing.B) {
+	sizes := []struct {
+		name string
+		size int
+	}{
+		{"1KB", 1024},
+		{"64KB", 64 * 1024},
+		{"1MB", 1024 * 1024},
+	}
+
+	// "zzz123" has 'z' as first byte which is NOT in haystack.
+	// Both should scan at full speed with no false positives.
+	needleStr := "zzz123"
+	needle := NewSearcher(needleStr, true) // case-sensitive
+
+	for _, s := range sizes {
+		// Haystack has no 'z' or digits
+		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24)
+
+		b.Run(s.name+"/strings.Index", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = strings.Index(haystack, needleStr)
+			}
+		})
+
+		b.Run(s.name+"/Searcher.Index", func(b *testing.B) {
+			b.SetBytes(int64(len(haystack)))
+			for i := 0; i < b.N; i++ {
+				benchSink = needle.Index(haystack)
+			}
+		})
+	}
+}
+
 
