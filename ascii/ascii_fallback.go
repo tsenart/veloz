@@ -144,12 +144,9 @@ func normalizeASCII(s string) string {
 	return string(b)
 }
 
-// selectRarePair finds two rare bytes in O(n) time using a single-pass algorithm.
+// selectRarePair finds two rare bytes by sampling 8 positions across the needle.
 // Returns the two rarest bytes (lowercase) and their offsets, with off1 < off2.
 // If ranks is nil, uses the default caseFoldRank table (case-insensitive).
-// Custom ranks are case-folded internally (sum of upper+lower ranks for letters).
-// The function ensures that the two selected bytes are different (normalized)
-// when possible, preferring letters over non-letters.
 func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 byte, off2 int) {
 	n := len(needle)
 	if n == 0 {
@@ -159,12 +156,11 @@ func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 by
 		return toLower(needle[0]), 0, toLower(needle[0]), 0
 	}
 
-	// Build case-folded rank table (uint16 to handle sum of two bytes)
+	// Build case-folded rank table pointer
 	var foldedRanks *[256]uint16
 	if ranks == nil {
 		foldedRanks = &caseFoldRank
 	} else {
-		// Case-fold custom ranks: for letters, sum upper+lower
 		var customFolded [256]uint16
 		for i := 0; i < 256; i++ {
 			customFolded[i] = uint16(ranks[i])
@@ -178,70 +174,41 @@ func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 by
 		foldedRanks = &customFolded
 	}
 
-	// Single-pass: record first position of each normalized byte
-	// Use n as sentinel (valid positions are 0..n-1)
-	var firstPos [256]int32
-	for i := range firstPos {
-		firstPos[i] = int32(n) // sentinel = not seen
-	}
+	// Sample 8 positions spread across the needle
+	pos := [8]int{0, n / 8, (2 * n) / 8, (3 * n) / 8, (4 * n) / 8, (5 * n) / 8, (6 * n) / 8, n - 1}
 
-	for i := 0; i < n; i++ {
-		norm := toLower(needle[i])
-		if firstPos[norm] == int32(n) {
-			firstPos[norm] = int32(i)
-		}
-	}
+	// Find rarest and second-rarest among samples
+	best1Idx, best2Idx := 0, -1
+	best1Rank := foldedRanks[toLower(needle[pos[0]])]
 
-	// Post-process: find two norms with lowest rank
-	// Tie-breaker: prefer letters over non-letters
-	// Letters are 'a'-'z' (norm is already lowercase)
-	best1Norm, best2Norm := byte(0), byte(0)
-	best1Rank, best2Rank := uint16(0xFFFF), uint16(0xFFFF)
-	sentinel := int32(n)
-
-	for norm := 0; norm < 256; norm++ {
-		if firstPos[norm] == sentinel {
-			continue
-		}
-		r := foldedRanks[norm]
-		nb := byte(norm)
-		nbIsLetter := nb >= 'a' && nb <= 'z'
-
-		// Check if better than best1
-		best1IsLetter := best1Norm >= 'a' && best1Norm <= 'z'
-		if r < best1Rank || (r == best1Rank && nbIsLetter && !best1IsLetter) {
-			// Demote old best1 to best2 if it was set
-			if best1Rank != 0xFFFF {
-				best2Norm, best2Rank = best1Norm, best1Rank
+	for i := 1; i < 8; i++ {
+		c := toLower(needle[pos[i]])
+		r := foldedRanks[c]
+		if r < best1Rank {
+			best2Idx = best1Idx
+			best1Idx = i
+			best1Rank = r
+		} else if best2Idx == -1 || (c != toLower(needle[pos[best1Idx]]) && r < foldedRanks[toLower(needle[pos[best2Idx]])]) {
+			if c != toLower(needle[pos[best1Idx]]) {
+				best2Idx = i
 			}
-			best1Norm, best1Rank = nb, r
-			continue
-		}
-
-		// Check if better than best2 (must differ from best1)
-		if nb == best1Norm {
-			continue
-		}
-		best2IsLetter := best2Norm >= 'a' && best2Norm <= 'z'
-		if r < best2Rank || (r == best2Rank && nbIsLetter && !best2IsLetter) {
-			best2Norm, best2Rank = nb, r
 		}
 	}
 
-	// Handle degenerate case: all bytes same normalized value
-	if best2Rank == 0xFFFF {
+	// Fallback if no distinct second byte found
+	if best2Idx == -1 {
 		return toLower(needle[0]), 0, toLower(needle[n-1]), n - 1
 	}
 
-	// Get positions and ensure off1 < off2
-	off1 = int(firstPos[best1Norm])
-	off2 = int(firstPos[best2Norm])
+	off1, off2 = pos[best1Idx], pos[best2Idx]
+	rare1, rare2 = toLower(needle[off1]), toLower(needle[off2])
+
 	if off1 > off2 {
 		off1, off2 = off2, off1
-		best1Norm, best2Norm = best2Norm, best1Norm
+		rare1, rare2 = rare2, rare1
 	}
 
-	return best1Norm, off1, best2Norm, off2
+	return rare1, off1, rare2, off2
 }
 
 // Needle represents a precomputed needle for fast case-insensitive search.
