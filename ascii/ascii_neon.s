@@ -3301,7 +3301,7 @@ LBB6_85:
 	BNE  LBB6_92         // <--                                  // b.ne	.LBB6_92
 	LSRW $2, R7, R9      // <--                                  // lsr	w9, w7, #2
 	LSLW $3, R7, R30     // <--                                  // lsl	w30, w7, #3
-	NOP                  // (skipped)                            // str	x26, [sp, #48]
+	MOVD R26, 48(RSP)    // <--                                  // str	x26, [sp, #48]
 	MOVD R14, R26        // <--                                  // mov	x26, x14
 	WORD $0x7940032e     // MOVHU (R25), R14                     // ldrh	w14, [x25]
 	MOVD R19, R2         // <--                                  // mov	x2, x19
@@ -3315,7 +3315,7 @@ LBB6_85:
 	MOVD R2, R19         // <--                                  // mov	x19, x2
 	ORR  R14, R9, R3     // <--                                  // orr	x3, x9, x14
 	MOVD R26, R14        // <--                                  // mov	x14, x26
-	NOP                  // (skipped)                            // ldr	x26, [sp, #48]
+	MOVD 48(RSP), R26    // <--                                  // ldr	x26, [sp, #48]
 	JMP  LBB6_92         // <--                                  // b	.LBB6_92
 
 LBB6_89:
@@ -4113,7 +4113,7 @@ LBB6_249:
 
 LBB6_250:
 	LSRW  $2, R7, R9      // <--                                  // lsr	w9, w7, #2
-	NOP                   // (skipped)                            // str	x21, [sp, #40]
+	MOVD R21, 40(RSP)    // <--                                  // str	x21, [sp, #40]
 	LSLW  $3, R7, R19     // <--                                  // lsl	w19, w7, #3
 	MOVW  R9, 32(RSP)     // <--                                  // str	w9, [sp, #32]
 	WORD  $0x79400349     // MOVHU (R26), R9                      // ldrh	w9, [x26]
@@ -4126,7 +4126,7 @@ LBB6_250:
 	MOVD  24(RSP), R21    // <--                                  // ldr	x21, [sp, #24]
 	LSL   R19, R21, R19   // <--                                  // lsl	x19, x21, x19
 	LSL   R9, R26, R9     // <--                                  // lsl	x9, x26, x9
-	NOP                   // (skipped)                            // ldr	x21, [sp, #40]
+	MOVD 40(RSP), R21    // <--                                  // ldr	x21, [sp, #40]
 	ORR   R3, R19, R3     // <--                                  // orr	x3, x19, x3
 	ORR   R9, R3, R3      // <--                                  // orr	x3, x3, x9
 
@@ -4320,7 +4320,7 @@ LBB6_283:
 	BNE   LBB6_290       // <--                                  // b.ne	.LBB6_290
 	LSRW  $2, R6, R9     // <--                                  // lsr	w9, w6, #2
 	LSLW  $3, R6, R3     // <--                                  // lsl	w3, w6, #3
-	NOP                  // (skipped)                            // str	x21, [sp, #40]
+	MOVD R21, 40(RSP)    // <--                                  // str	x21, [sp, #40]
 	MOVW  R9, 32(RSP)    // <--                                  // str	w9, [sp, #32]
 	WORD  $0x794000e9    // MOVHU (R7), R9                       // ldrh	w9, [x7]
 	ANDW  $32, R3, R21   // <--                                  // and	w21, w3, #0x20
@@ -4334,7 +4334,7 @@ LBB6_283:
 	MOVD  24(RSP), R3    // <--                                  // ldr	x3, [sp, #24]
 	LSL   R21, R3, R3    // <--                                  // lsl	x3, x3, x21
 	LSL   R9, R7, R9     // <--                                  // lsl	x9, x7, x9
-	NOP                  // (skipped)                            // ldr	x21, [sp, #40]
+	MOVD 40(RSP), R21    // <--                                  // ldr	x21, [sp, #40]
 	ORR   R19, R3, R3    // <--                                  // orr	x3, x3, x19
 	ORR   R9, R3, R19    // <--                                  // orr	x19, x3, x9
 	JMP   LBB6_290       // <--                                  // b	.LBB6_290
@@ -4507,7 +4507,7 @@ LBB6_324:
 
 LBB6_325:
 	LSRW  $2, R7, R9      // <--                                  // lsr	w9, w7, #2
-	NOP                   // (skipped)                            // str	x21, [sp, #40]
+	MOVD R21, 40(RSP)    // <--                                  // str	x21, [sp, #40]
 	LSLW  $3, R7, R3      // <--                                  // lsl	w3, w7, #3
 	MOVW  R9, 32(RSP)     // <--                                  // str	w9, [sp, #32]
 	WORD  $0x79400349     // MOVHU (R26), R9                      // ldrh	w9, [x26]
@@ -4520,7 +4520,7 @@ LBB6_325:
 	MOVD  24(RSP), R21    // <--                                  // ldr	x21, [sp, #24]
 	LSL   R3, R21, R3     // <--                                  // lsl	x3, x21, x3
 	LSL   R9, R26, R9     // <--                                  // lsl	x9, x26, x9
-	NOP                   // (skipped)                            // ldr	x21, [sp, #40]
+	MOVD 40(RSP), R21    // <--                                  // ldr	x21, [sp, #40]
 	ORR   R19, R3, R3     // <--                                  // orr	x3, x3, x19
 	ORR   R9, R3, R19     // <--                                  // orr	x19, x3, x9
 
@@ -5240,7 +5240,7 @@ LBB6_430:
 	MOVW  R25, 56(RSP)              // <--                                  // str	w25, [sp, #56]
 	STP   (R2, R4), 96(RSP)         // <--                                  // stp	x2, x4, [sp, #96]
 	STP   (R5, R6), 112(RSP)        // <--                                  // stp	x5, x6, [sp, #112]
-	NOP                             // (skipped)                            // str	x21, [sp, #32]
+	MOVD R21, 32(RSP)    // <--                                  // str	x21, [sp, #32]
 	JMP   LBB6_435                  // <--                                  // b	.LBB6_435
 
 LBB6_434:
@@ -5431,7 +5431,7 @@ LBB6_468:
 	LDP   40(RSP), (R20, R26) // <--                                  // ldp	x20, x26, [sp, #40]
 	ADD   $256, RSP, R4       // <--                                  // add	x4, sp, #256
 	MOVWU 56(RSP), R25        // <--                                  // ldr	w25, [sp, #56]
-	NOP                       // (skipped)                            // ldr	x21, [sp, #32]
+	MOVD 32(RSP), R21    // <--                                  // ldr	x21, [sp, #32]
 	ADD   $240, RSP, R5       // <--                                  // add	x5, sp, #240
 	ADD   $224, RSP, R6       // <--                                  // add	x6, sp, #224
 
@@ -6459,7 +6459,7 @@ LBB7_85:
 	BNE  LBB7_92         // <--                                  // b.ne	.LBB7_92
 	LSRW $2, R7, R9      // <--                                  // lsr	w9, w7, #2
 	LSLW $3, R7, R30     // <--                                  // lsl	w30, w7, #3
-	NOP                  // (skipped)                            // str	x26, [sp, #48]
+	MOVD R26, 48(RSP)    // <--                                  // str	x26, [sp, #48]
 	MOVD R14, R26        // <--                                  // mov	x26, x14
 	WORD $0x7940032e     // MOVHU (R25), R14                     // ldrh	w14, [x25]
 	MOVD R19, R2         // <--                                  // mov	x2, x19
@@ -6473,7 +6473,7 @@ LBB7_85:
 	MOVD R2, R19         // <--                                  // mov	x19, x2
 	ORR  R14, R9, R3     // <--                                  // orr	x3, x9, x14
 	MOVD R26, R14        // <--                                  // mov	x14, x26
-	NOP                  // (skipped)                            // ldr	x26, [sp, #48]
+	MOVD 48(RSP), R26    // <--                                  // ldr	x26, [sp, #48]
 	JMP  LBB7_92         // <--                                  // b	.LBB7_92
 
 LBB7_89:
@@ -7244,7 +7244,7 @@ LBB7_249:
 
 LBB7_250:
 	LSRW  $2, R7, R9      // <--                                  // lsr	w9, w7, #2
-	NOP                   // (skipped)                            // str	x21, [sp, #40]
+	MOVD R21, 40(RSP)    // <--                                  // str	x21, [sp, #40]
 	LSLW  $3, R7, R19     // <--                                  // lsl	w19, w7, #3
 	MOVW  R9, 32(RSP)     // <--                                  // str	w9, [sp, #32]
 	WORD  $0x79400349     // MOVHU (R26), R9                      // ldrh	w9, [x26]
@@ -7257,7 +7257,7 @@ LBB7_250:
 	MOVD  24(RSP), R21    // <--                                  // ldr	x21, [sp, #24]
 	LSL   R19, R21, R19   // <--                                  // lsl	x19, x21, x19
 	LSL   R9, R26, R9     // <--                                  // lsl	x9, x26, x9
-	NOP                   // (skipped)                            // ldr	x21, [sp, #40]
+	MOVD 40(RSP), R21    // <--                                  // ldr	x21, [sp, #40]
 	ORR   R3, R19, R3     // <--                                  // orr	x3, x19, x3
 	ORR   R9, R3, R3      // <--                                  // orr	x3, x3, x9
 
@@ -7448,7 +7448,7 @@ LBB7_283:
 	BNE   LBB7_290       // <--                                  // b.ne	.LBB7_290
 	LSRW  $2, R6, R9     // <--                                  // lsr	w9, w6, #2
 	LSLW  $3, R6, R3     // <--                                  // lsl	w3, w6, #3
-	NOP                  // (skipped)                            // str	x21, [sp, #40]
+	MOVD R21, 40(RSP)    // <--                                  // str	x21, [sp, #40]
 	MOVW  R9, 32(RSP)    // <--                                  // str	w9, [sp, #32]
 	WORD  $0x794000e9    // MOVHU (R7), R9                       // ldrh	w9, [x7]
 	ANDW  $32, R3, R21   // <--                                  // and	w21, w3, #0x20
@@ -7462,7 +7462,7 @@ LBB7_283:
 	MOVD  24(RSP), R3    // <--                                  // ldr	x3, [sp, #24]
 	LSL   R21, R3, R3    // <--                                  // lsl	x3, x3, x21
 	LSL   R9, R7, R9     // <--                                  // lsl	x9, x7, x9
-	NOP                  // (skipped)                            // ldr	x21, [sp, #40]
+	MOVD 40(RSP), R21    // <--                                  // ldr	x21, [sp, #40]
 	ORR   R19, R3, R3    // <--                                  // orr	x3, x3, x19
 	ORR   R9, R3, R19    // <--                                  // orr	x19, x3, x9
 	JMP   LBB7_290       // <--                                  // b	.LBB7_290
@@ -7629,7 +7629,7 @@ LBB7_324:
 
 LBB7_325:
 	LSRW  $2, R7, R9      // <--                                  // lsr	w9, w7, #2
-	NOP                   // (skipped)                            // str	x21, [sp, #40]
+	MOVD R21, 40(RSP)    // <--                                  // str	x21, [sp, #40]
 	LSLW  $3, R7, R3      // <--                                  // lsl	w3, w7, #3
 	MOVW  R9, 32(RSP)     // <--                                  // str	w9, [sp, #32]
 	WORD  $0x79400349     // MOVHU (R26), R9                      // ldrh	w9, [x26]
@@ -7642,7 +7642,7 @@ LBB7_325:
 	MOVD  24(RSP), R21    // <--                                  // ldr	x21, [sp, #24]
 	LSL   R3, R21, R3     // <--                                  // lsl	x3, x21, x3
 	LSL   R9, R26, R9     // <--                                  // lsl	x9, x26, x9
-	NOP                   // (skipped)                            // ldr	x21, [sp, #40]
+	MOVD 40(RSP), R21    // <--                                  // ldr	x21, [sp, #40]
 	ORR   R19, R3, R3     // <--                                  // orr	x3, x3, x19
 	ORR   R9, R3, R19     // <--                                  // orr	x19, x3, x9
 
@@ -8353,7 +8353,7 @@ LBB7_430:
 	MOVW  R25, 56(RSP)              // <--                                  // str	w25, [sp, #56]
 	STP   (R2, R4), 96(RSP)         // <--                                  // stp	x2, x4, [sp, #96]
 	STP   (R5, R6), 112(RSP)        // <--                                  // stp	x5, x6, [sp, #112]
-	NOP                             // (skipped)                            // str	x21, [sp, #32]
+	MOVD R21, 32(RSP)    // <--                                  // str	x21, [sp, #32]
 	JMP   LBB7_435                  // <--                                  // b	.LBB7_435
 
 LBB7_434:
@@ -8538,7 +8538,7 @@ LBB7_468:
 	LDP   40(RSP), (R20, R26) // <--                                  // ldp	x20, x26, [sp, #40]
 	ADD   $256, RSP, R4       // <--                                  // add	x4, sp, #256
 	MOVWU 56(RSP), R25        // <--                                  // ldr	w25, [sp, #56]
-	NOP                       // (skipped)                            // ldr	x21, [sp, #32]
+	MOVD 32(RSP), R21    // <--                                  // ldr	x21, [sp, #32]
 	ADD   $240, RSP, R5       // <--                                  // add	x5, sp, #240
 	ADD   $224, RSP, R6       // <--                                  // add	x6, sp, #224
 
