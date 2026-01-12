@@ -462,6 +462,26 @@ func BenchmarkIndexTorture(b *testing.B) {
 			IndexFold(benchInputTorture, benchNeedleTorture)
 		}
 	})
+
+	b.Run("rabin-karp", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			indexFoldRabinKarp(benchInputTorture, benchNeedleTorture)
+		}
+	})
+
+	b.Run("rabin-karp-go", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			indexFoldRabinKarpGo(benchInputTorture, benchNeedleTorture)
+		}
+	})
+
+	// SearchNeedle with MakeNeedle should auto-detect pathological pattern and use Rabin-Karp
+	needle := MakeNeedle(benchNeedleTorture)
+	b.Run("SearchNeedle", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			SearchNeedle(benchInputTorture, needle)
+		}
+	})
 }
 
 func BenchmarkIndexPeriodic(b *testing.B) {
@@ -837,6 +857,11 @@ func FuzzIndexFold(f *testing.F) {
 		rkRes := indexFoldRabinKarp(istr, isubstr)
 		if rkRes != want {
 			t.Fatalf("indexFoldRabinKarp(%q, %q) = %v; want %v", istr, isubstr, rkRes, want)
+		}
+
+		rkGoRes := indexFoldRabinKarpGo(istr, isubstr)
+		if rkGoRes != want {
+			t.Fatalf("indexFoldRabinKarpGo(%q, %q) = %v; want %v", istr, isubstr, rkGoRes, want)
 		}
 	})
 }

@@ -62,9 +62,7 @@ func IndexAny(data, chars string) int {
 	return indexAnyNeonBitset(data, bitset[0], bitset[1], bitset[2], bitset[3])
 }
 
-func indexFoldRabinKarp(a, b string) int {
-	return indexFoldGo(a, b)
-}
+// indexFoldRabinKarp is now generated via gocc in ascii_neon.go
 
 // IndexFold finds the first case-insensitive match of needle in haystack.
 // Uses the same optimized NEON path as SearchNeedle but computes rare bytes inline.

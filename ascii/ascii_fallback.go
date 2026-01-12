@@ -448,6 +448,82 @@ func indexFoldGo[T string | []byte](s T, substr T) int {
 	return -1
 }
 
+// indexFoldRabinKarpGo is a scalar Rabin-Karp for case-insensitive search.
+// Uses rolling hash with antisigma trick, calls into SIMD EqualFold for verification.
+// Kept for benchmarking comparison against SIMD implementations.
+func indexFoldRabinKarpGo(haystack, needle string) int {
+	n := len(needle)
+	if n == 0 {
+		return 0
+	}
+	h := len(haystack)
+	if h < n {
+		return -1
+	}
+
+	// Precompute constants
+	searchLen := h - n + 1
+	powW := powPrimeScalar(n)
+	antisigma := -powW // -B^w mod 2^32 (unsigned overflow is fine)
+
+	// Compute needle hash (case-folded)
+	var targetHash uint32
+	for i := 0; i < n; i++ {
+		targetHash = targetHash*primeRK + uint32(foldTable[needle[i]])
+	}
+
+	// Compute initial hash at position 0
+	var hash uint32
+	for i := 0; i < n; i++ {
+		hash = hash*primeRK + uint32(foldTable[haystack[i]])
+	}
+
+	// Check position 0
+	if hash == targetHash && EqualFold(haystack[:n], needle) {
+		return 0
+	}
+
+	// Roll through remaining positions
+	for i := 1; i < searchLen; i++ {
+		// Rolling hash: hash = hash*primeRK + new_char + old_char*antisigma
+		hash = hash*primeRK + uint32(foldTable[haystack[i+n-1]]) + antisigma*uint32(foldTable[haystack[i-1]])
+		if hash == targetHash && EqualFold(haystack[i:i+n], needle) {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// foldTable is a lookup table for case folding: 'a'-'z' -> 'A'-'Z', others unchanged.
+var foldTable = [256]byte{
+	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+	32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+	64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
+	96, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 123, 124, 125, 126, 127,
+	128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
+	160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
+	192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223,
+	224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255,
+}
+
+// primeRK is the same prime used by Go stdlib for Rabin-Karp
+const primeRK = 16777619
+
+// powPrimeScalar computes primeRK^n mod 2^32 using repeated squaring.
+func powPrimeScalar(n int) uint32 {
+	result := uint32(1)
+	base := uint32(primeRK)
+	for n > 0 {
+		if n&1 != 0 {
+			result *= base
+		}
+		base *= base
+		n >>= 1
+	}
+	return result
+}
+
 func indexAnyGo(s, chars string) int {
 	if len(chars) == 0 {
 		return -1

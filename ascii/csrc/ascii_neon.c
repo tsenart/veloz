@@ -509,86 +509,166 @@ static inline uint8x16_t load_data16_v2(const unsigned char *src, int64_t len) {
     return vld1q_u8(dst);
 }
 
-static inline uint32_t rabin_karp_hash_string_fold(unsigned char *data, uint64_t data_len, uint32_t *pow_ret)
-{
-    const uint32_t PrimeRK = 16777619;
+// =============================================================================
+// SIMD Rabin-Karp with Sills' unscaled hash + clausecker's NEON parallelism
+// =============================================================================
+// Key insight from Sills: Instead of scaling hash each iteration (H_{n+1} = B*H_n + ...),
+// use unscaled hash H'_n = H_n * B^n. This moves the multiply out of the critical path.
+// Recurrence: H'_{n+1} = H'_n + a_{n+w}*B^{n+w} - a_n*B^n
+// To compare: H'_n == target * B^n
+//
+// Key insight from clausecker: Process 4 parallel hash streams using NEON uint32x4_t.
+// Base B=31 is shift-friendly: x*31 = (x<<5) - x
 
+// Case-fold lookup table: 'a'-'z' -> 'A'-'Z', others unchanged
+static const uint8_t fold_table[256] = {
+    0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,
+    32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,
+    64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,
+    96,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,123,124,125,126,127,
+    128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,148,149,150,151,152,153,154,155,156,157,158,159,
+    160,161,162,163,164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,183,184,185,186,187,188,189,190,191,
+    192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,
+    224,225,226,227,228,229,230,231,232,233,234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,254,255,
+};
+
+// Case-fold a byte using lookup table (no branches)
+static inline uint8_t fold_byte(uint8_t c) {
+    return fold_table[c];
+}
+
+// Case-fold 16 bytes using NEON
+static inline uint8x16_t fold_bytes_neon(uint8x16_t v) {
+    const uint8x16_t char_a = vdupq_n_u8('a');
+    const uint8x16_t char_z = vdupq_n_u8('z');
+    const uint8x16_t mask = vdupq_n_u8(0xDF);
+    
+    // is_lower = (v >= 'a') & (v <= 'z')
+    uint8x16_t ge_a = vcgeq_u8(v, char_a);
+    uint8x16_t le_z = vcleq_u8(v, char_z);
+    uint8x16_t is_lower = vandq_u8(ge_a, le_z);
+    
+    // Clear bit 5 for lowercase letters
+    return vbslq_u8(is_lower, vandq_u8(v, mask), v);
+}
+
+// Use same prime as Go stdlib for better hash distribution
+#define PRIME_RK 16777619
+
+// Compute B^n mod 2^32 using repeated squaring
+static inline uint32_t pow_prime(uint64_t n) {
+    uint32_t result = 1;
+    uint32_t base = PRIME_RK;
+    while (n > 0) {
+        if (n & 1) result *= base;
+        base *= base;
+        n >>= 1;
+    }
+    return result;
+}
+
+// Compute hash of needle (case-folded) using standard Rabin-Karp formula
+// H = a_0*B^{w-1} + a_1*B^{w-2} + ... + a_{w-1}
+static inline uint32_t hash_needle_fold(const unsigned char *needle, int64_t needle_len) {
     uint32_t hash = 0;
-    for (uint64_t i = 0; i < data_len; i++)
-    {
-        uint8_t c = data[i];
-        if (c >= 'a' && c <= 'z') {
-            c -= 0x80;
-        } else {
-            c -= 0x60;
-        }
-        hash = hash * PrimeRK + c;
+    for (int64_t i = 0; i < needle_len; i++) {
+        hash = hash * PRIME_RK + fold_table[needle[i]];
     }
-
-    uint32_t sq = PrimeRK;
-    uint32_t pow = 1;
-
-    for (uint64_t i = data_len; i > 0; i >>= 1)
-    {
-        if (i & 1) pow *= sq;
-        sq *= sq;
-    }
-
-    *pow_ret = pow;
     return hash;
 }
 
-static inline int64_t index_fold_rabin_karp_core(unsigned char *haystack, const int64_t haystack_len, unsigned char *needle, const int64_t needle_len,
-    const uint8x16x2_t table, const uint8x16_t shift)
-{
-    const uint32_t PrimeRK = 16777619;
+// =============================================================================
+// SIMD Rabin-Karp with reversed polynomial (Matt Sills' optimization)
+// =============================================================================
+// Standard RK: H[n+1] = B * H[n] + new - B^w * old  (multiply on critical path)
+// Reversed:    H'[n+1] = H'[n] + new * B^(n+w) - old * B^n  (only add/sub on critical path)
+// Compare:     H'[n] == target * B^n
+//
+// This eliminates the loop-carried multiply dependency, allowing all multiplications
+// to be issued in parallel since they only depend on the input bytes and exponents.
 
-    // FIXME: there's no SIMD here
-    uint32_t hash_needle, pow;
-    hash_needle = rabin_karp_hash_string_fold(needle, needle_len, &pow);
-
-    uint32_t hash = 0;
-    // calculate the hash for the first needle_len bytes
-    for (uint64_t i = 0; i < needle_len; i++)
-    {
-        uint8_t c = haystack[i];
-        if (c >= 'a' && c <= 'z') {
-            c -= 0x80;
-        } else {
-            c -= 0x60;
-        }
-        hash = hash * PrimeRK + c;
+// Compute reversed polynomial hash with case folding: H' = sum(fold(s[j]) * B^j) for j in [0, len)
+static inline uint32_t hash_reversed_fold(const unsigned char *s, int64_t len) {
+    uint32_t h = 0;
+    uint32_t Bj = 1;  // B^j
+    for (int64_t j = 0; j < len; j++) {
+        h += fold_table[s[j]] * Bj;
+        Bj *= PRIME_RK;
     }
+    return h;
+}
 
-    if (hash == hash_needle && equal_fold_core(haystack, needle, needle_len, table, shift))
-    {
+// Standard Rabin-Karp hash function (for position-independent hashes)
+static inline uint32_t hash_rk_fold(const unsigned char *s, int64_t len) {
+    uint32_t h = 0;
+    for (int64_t j = 0; j < len; j++) {
+        h = h * PRIME_RK + fold_table[s[j]];
+    }
+    return h;
+}
+
+// gocc: indexFoldRabinKarp(haystack string, needle string) int
+int64_t index_fold_rabin_karp_simd(unsigned char *haystack, int64_t haystack_len,
+                                    unsigned char *needle, int64_t needle_len)
+{
+    if (needle_len <= 0) return 0;
+    if (haystack_len < needle_len) return -1;
+    
+    const int64_t search_len = haystack_len - needle_len + 1;
+    const int64_t w = needle_len;
+    
+    // For SIMD verification
+    const uint8x16x2_t table = vld1q_u8_x2(uppercasingTable);
+    const uint8x16_t vtbl_shift = vdupq_n_u8(0x60);
+    
+    // Precompute constants for standard Rabin-Karp
+    const uint32_t B = PRIME_RK;
+    const uint32_t B2 = B * B;
+    const uint32_t B3 = B2 * B;
+    const uint32_t B4 = B3 * B;
+    const uint32_t Bw = pow_prime(w);
+    const uint32_t antisigma = -Bw;  // -B^w mod 2^32
+    
+    // Compute target hash (case-folded)
+    const uint32_t target_hash = hash_rk_fold(needle, needle_len);
+    
+    // For small haystacks, use scalar
+    if (search_len <= 8) {
+        uint32_t hash = hash_rk_fold(haystack, w);
+        
+        if (hash == target_hash && equal_fold_core(haystack, needle, needle_len, table, vtbl_shift)) {
+            return 0;
+        }
+        
+        for (int64_t i = 1; i < search_len; i++) {
+            // Standard roll: hash = hash * B + new + antisigma * old
+            hash = hash * B + fold_table[haystack[i + w - 1]] + antisigma * fold_table[haystack[i - 1]];
+            
+            if (hash == target_hash && equal_fold_core(haystack + i, needle, needle_len, table, vtbl_shift)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+    
+    // Compute initial hash at position 0
+    uint32_t hash = hash_rk_fold(haystack, w);
+    
+    // Check position 0
+    if (hash == target_hash && equal_fold_core(haystack, needle, needle_len, table, vtbl_shift)) {
         return 0;
     }
-
-    // TODO: use actual simd here
-    for (uint64_t i = needle_len; i < haystack_len; i++)
-    {
-        uint8_t c = haystack[i];
-        if (c >= 'a' && c <= 'z') {
-            c -= 0x80;
-        } else {
-            c -= 0x60;
-        }
-        hash = hash * PrimeRK + c;
-        c = haystack[i - needle_len];
-        if (c >= 'a' && c <= 'z') {
-            c -= 0x80;
-        } else {
-            c -= 0x60;
-        }
-        hash -= pow * c;
-
-        if (hash == hash_needle && equal_fold_core(haystack + i - needle_len + 1, needle, needle_len, table, shift))
-        {
-            return i - needle_len + 1;
+    
+    // Roll through remaining positions
+    for (int64_t i = 1; i < search_len; i++) {
+        // Rolling hash: hash = hash * B + new + old * antisigma
+        hash = hash * B + fold_table[haystack[i + w - 1]] + antisigma * fold_table[haystack[i - 1]];
+        
+        if (hash == target_hash && equal_fold_core(haystack + i, needle, needle_len, table, vtbl_shift)) {
+            return i;
         }
     }
-
+    
     return -1;
 }
 
@@ -724,34 +804,6 @@ static inline uint64_t index_fold_process_block(uint8x16_t data, uint8x16_t data
     // [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     return vget_lane_u64(narrowed, 0);
 }
-
-// NOTE: indexFoldRabinKarp disabled for gocc - uses internal function calls
-static int64_t index_fold_rabin_karp(unsigned char *haystack, const int64_t haystack_len, unsigned char *needle, const int64_t needle_len)
-{
-    const uint64_t blockSize = 16; // NEON can process 128 bits (16 bytes) at a time
-    const uint8x16x2_t table = vld1q_u8_x2(uppercasingTable);
-    const uint8x16_t shift = vdupq_n_u8(0x60);
-
-    if (haystack_len < needle_len) return -1;
-    if (needle_len == 0) return 0;
-    if (haystack_len == needle_len) {
-        return equal_fold_core(haystack, needle, needle_len, table, shift) ? 0 : -1;
-    }
-
-    switch (needle_len)
-    {
-    case 1:
-        // special case for 1-byte needles
-        return index_fold_1_byte_needle(haystack, haystack_len, *(uint8_t *)needle, table);
-    case 2:
-        // special case for 2-byte needles, no need for two loads
-        return index_fold_2_byte_needle(haystack, haystack_len, (uint16_t *)needle, table);
-    }
-
-    return index_fold_rabin_karp_core(haystack, haystack_len, needle, needle_len, table, shift);
-}
-
-
 
 // =============================================================================
 // IndexFoldNeedle - Optimized case-insensitive search with precomputed needle

@@ -15,3 +15,6 @@ func IndexMask(data string, mask byte) int
 
 //go:noescape
 func EqualFold(a string, b string) bool
+
+//go:noescape
+func indexFoldRabinKarp(haystack string, needle string) int
