@@ -981,25 +981,34 @@ __attribute__((always_inline)) static inline uint32_t extract_syndrome(uint8x16_
 }
 
 // Helper: Process all matches in a syndrome for a single chunk
-// Returns 1 if found match, 0 to continue, -1 to switch to 2-byte mode
-#define PROCESS_SYNDROME_INLINE(syndrome, chunk_offset, ptr_before_load, load_size, \
-    search_start, search_len, haystack, haystack_len, needle, needle_len, \
-    failures, VERIFY_FN) \
+// Key optimization: compute candidate pointer from search_ptr (already in register)
+// This avoids compiler pre-computing haystack+offset pointers and spilling them
+#define PROCESS_SYNDROME_INLINE(syndrome, chunk_offset, base_offset, load_size, \
+    search_len, haystack, haystack_len, needle, needle_len, \
+    failures, search_ptr, remaining, search_start, VERIFY_FN) \
 do { \
     uint32_t _syn = (syndrome); \
+    /* Compute rare byte location from search_ptr (which is already in a register) */ \
+    /* search_ptr was advanced by load_size, so rare byte is at search_ptr - load_size + chunk_offset + byte_pos */ \
+    unsigned char *_chunk_base = (search_ptr) - (load_size) + (chunk_offset); \
     while (_syn) { \
         int _bit_pos = __builtin_ctz(_syn); \
         int _byte_pos = _bit_pos >> 1; \
-        int64_t _pos = ((ptr_before_load) - (search_start)) + (chunk_offset) + _byte_pos; \
+        /* _rare_ptr points to where we found the rare byte */ \
+        unsigned char *_rare_ptr = _chunk_base + _byte_pos; \
+        /* _pos = position in search space = rare_ptr - search_start */ \
+        int64_t _pos = _rare_ptr - (search_start); \
         if (_pos <= (search_len) - 1) { \
+            /* Needle starts at haystack + _pos = rare_ptr - off1 (search_start = haystack + off1) */ \
+            /* So haystack + _pos = haystack + (rare_ptr - search_start) = haystack + rare_ptr - haystack - off1 = rare_ptr - off1 */ \
+            /* Which equals: search_start - off1 + _pos = haystack + _pos. Verified correct. */ \
             if (VERIFY_FN((haystack) + _pos, (needle), (needle_len), (haystack_len) - _pos)) { \
                 return _pos; \
             } \
             (failures)++; \
-            int64_t _bytes_scanned = (ptr_before_load) + (load_size) - (search_start); \
-            if ((failures) > 4 + (_bytes_scanned >> 8)) { \
-                search_ptr = (ptr_before_load); \
-                remaining += (load_size); \
+            if ((failures) > 4 + (((base_offset) + (load_size)) >> 8)) { \
+                (search_ptr) -= (load_size); \
+                (remaining) += (load_size); \
                 goto setup_2byte_mode; \
             } \
         } \
@@ -1063,8 +1072,8 @@ __attribute__((always_inline)) static inline int64_t func_name( \
                                                                                \
 loop128_letter:                                                                \
     while (remaining >= 128 && search_ptr + 128 <= data_end) {                 \
-        /* Load 128 bytes using vld1q_u8_x4 for 64-byte batched loads */       \
-        unsigned char *ptr_before = search_ptr;                                \
+        /* Compute base offset once - reduces live variables */                \
+        int64_t base_offset = search_ptr - search_start;                       \
         uint8x16x4_t batch0 = vld1q_u8_x4(search_ptr);                         \
         uint8x16x4_t batch1 = vld1q_u8_x4(search_ptr + 64);                    \
         search_ptr += 128;                                                     \
@@ -1085,42 +1094,40 @@ loop128_letter:                                                                \
         uint8x16_t any0123 = vorrq_u8(vorrq_u8(m0, m1), vorrq_u8(m2, m3));     \
         uint8x16_t any4567 = vorrq_u8(vorrq_u8(m4, m5), vorrq_u8(m6, m7));     \
         uint8x16_t any_all = vorrq_u8(any0123, any4567);                       \
-        uint64x2_t any64 = vpaddq_u64(vreinterpretq_u64_u8(any_all), vreinterpretq_u64_u8(any_all)); \
-        if (vgetq_lane_u64(any64, 0) == 0) continue;                           \
+        if (vmaxvq_u8(any_all) == 0) continue;                                 \
+                                                                               \
                                                                                \
         /* Check first 64 bytes - early exit like ASM */                       \
-        uint64x2_t first64 = vpaddq_u64(vreinterpretq_u64_u8(any0123), vreinterpretq_u64_u8(any0123)); \
-        if (vgetq_lane_u64(first64, 0) != 0) {                                 \
+        if (vmaxvq_u8(any0123) != 0) {                                 \
             /* Process chunks 0-3 explicitly - NO POINTER ARRAYS */            \
             uint32_t syn0 = extract_syndrome(m0, v_magic);                     \
-            if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, ptr_before, 128,        \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, base_offset, 128,       \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn1 = extract_syndrome(m1, v_magic);                     \
-            if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn2 = extract_syndrome(m2, v_magic);                     \
-            if (syn2) PROCESS_SYNDROME_INLINE(syn2, 32, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn2) PROCESS_SYNDROME_INLINE(syn2, 32, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn3 = extract_syndrome(m3, v_magic);                     \
-            if (syn3) PROCESS_SYNDROME_INLINE(syn3, 48, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn3) PROCESS_SYNDROME_INLINE(syn3, 48, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
         }                                                                      \
         /* Check second 64 bytes */                                            \
-        uint64x2_t second64 = vpaddq_u64(vreinterpretq_u64_u8(any4567), vreinterpretq_u64_u8(any4567)); \
-        if (vgetq_lane_u64(second64, 0) != 0) {                                \
+        if (vmaxvq_u8(any4567) != 0) {                                \
             /* Process chunks 4-7 explicitly - NO POINTER ARRAYS */            \
             uint32_t syn4 = extract_syndrome(m4, v_magic);                     \
-            if (syn4) PROCESS_SYNDROME_INLINE(syn4, 64, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn4) PROCESS_SYNDROME_INLINE(syn4, 64, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn5 = extract_syndrome(m5, v_magic);                     \
-            if (syn5) PROCESS_SYNDROME_INLINE(syn5, 80, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn5) PROCESS_SYNDROME_INLINE(syn5, 80, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn6 = extract_syndrome(m6, v_magic);                     \
-            if (syn6) PROCESS_SYNDROME_INLINE(syn6, 96, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn6) PROCESS_SYNDROME_INLINE(syn6, 96, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn7 = extract_syndrome(m7, v_magic);                     \
-            if (syn7) PROCESS_SYNDROME_INLINE(syn7, 112, ptr_before, 128,      \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn7) PROCESS_SYNDROME_INLINE(syn7, 112, base_offset, 128,     \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
         }                                                                      \
     }                                                                          \
     if (remaining >= 32) goto loop32_letter;                                   \
@@ -1128,7 +1135,7 @@ loop128_letter:                                                                \
                                                                                \
 loop32_letter:                                                                 \
     while (remaining >= 32 && search_ptr + 32 <= data_end) {                   \
-        unsigned char *ptr_before = search_ptr;                                \
+        int64_t base_offset = search_ptr - search_start;                       \
         uint8x16_t d0 = vld1q_u8(search_ptr);                                  \
         uint8x16_t d1 = vld1q_u8(search_ptr + 16);                             \
         search_ptr += 32;                                                      \
@@ -1138,16 +1145,15 @@ loop32_letter:                                                                 \
         uint8x16_t m1 = vceqq_u8(vorrq_u8(d1, v_mask1), v_target1);            \
                                                                                \
         uint8x16_t any = vorrq_u8(m0, m1);                                     \
-        uint64x2_t any64 = vpaddq_u64(vreinterpretq_u64_u8(any), vreinterpretq_u64_u8(any)); \
-        if (vgetq_lane_u64(any64, 0) == 0) continue;                           \
+        if (vmaxvq_u8(any) == 0) continue;                                     \
                                                                                \
         /* Process chunks explicitly - NO POINTER ARRAYS */                    \
         uint32_t syn0 = extract_syndrome(m0, v_magic);                         \
-        if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, ptr_before, 32,             \
-            search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+        if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, base_offset, 32,            \
+            search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
         uint32_t syn1 = extract_syndrome(m1, v_magic);                         \
-        if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, ptr_before, 32,            \
-            search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+        if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, base_offset, 32,           \
+            search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
     }                                                                          \
     goto loop16_letter;                                                        \
                                                                                \
@@ -1217,8 +1223,8 @@ nonletter_dispatch:                                                            \
                                                                                \
 loop128_nonletter:                                                             \
     while (remaining >= 128 && search_ptr + 128 <= data_end) {                 \
-        /* Load 128 bytes using vld1q_u8_x4 for 64-byte batched loads */       \
-        unsigned char *ptr_before = search_ptr;                                \
+        /* Compute base offset once - reduces live variables */                \
+        int64_t base_offset = search_ptr - search_start;                       \
         uint8x16x4_t batch0 = vld1q_u8_x4(search_ptr);                         \
         uint8x16x4_t batch1 = vld1q_u8_x4(search_ptr + 64);                    \
         search_ptr += 128;                                                     \
@@ -1238,42 +1244,40 @@ loop128_nonletter:                                                             \
         uint8x16_t any0123 = vorrq_u8(vorrq_u8(m0, m1), vorrq_u8(m2, m3));     \
         uint8x16_t any4567 = vorrq_u8(vorrq_u8(m4, m5), vorrq_u8(m6, m7));     \
         uint8x16_t any_all = vorrq_u8(any0123, any4567);                       \
-        uint64x2_t any64 = vpaddq_u64(vreinterpretq_u64_u8(any_all), vreinterpretq_u64_u8(any_all)); \
-        if (vgetq_lane_u64(any64, 0) == 0) continue;                           \
+        if (vmaxvq_u8(any_all) == 0) continue;                                 \
+                                                                               \
                                                                                \
         /* Check first 64 bytes - early exit like ASM */                       \
-        uint64x2_t first64 = vpaddq_u64(vreinterpretq_u64_u8(any0123), vreinterpretq_u64_u8(any0123)); \
-        if (vgetq_lane_u64(first64, 0) != 0) {                                 \
+        if (vmaxvq_u8(any0123) != 0) {                                 \
             /* Process chunks 0-3 explicitly - NO POINTER ARRAYS */            \
             uint32_t syn0 = extract_syndrome(m0, v_magic);                     \
-            if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, ptr_before, 128,        \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, base_offset, 128,       \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn1 = extract_syndrome(m1, v_magic);                     \
-            if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn2 = extract_syndrome(m2, v_magic);                     \
-            if (syn2) PROCESS_SYNDROME_INLINE(syn2, 32, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn2) PROCESS_SYNDROME_INLINE(syn2, 32, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn3 = extract_syndrome(m3, v_magic);                     \
-            if (syn3) PROCESS_SYNDROME_INLINE(syn3, 48, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn3) PROCESS_SYNDROME_INLINE(syn3, 48, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
         }                                                                      \
         /* Check second 64 bytes */                                            \
-        uint64x2_t second64 = vpaddq_u64(vreinterpretq_u64_u8(any4567), vreinterpretq_u64_u8(any4567)); \
-        if (vgetq_lane_u64(second64, 0) != 0) {                                \
+        if (vmaxvq_u8(any4567) != 0) {                                \
             /* Process chunks 4-7 explicitly - NO POINTER ARRAYS */            \
             uint32_t syn4 = extract_syndrome(m4, v_magic);                     \
-            if (syn4) PROCESS_SYNDROME_INLINE(syn4, 64, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn4) PROCESS_SYNDROME_INLINE(syn4, 64, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn5 = extract_syndrome(m5, v_magic);                     \
-            if (syn5) PROCESS_SYNDROME_INLINE(syn5, 80, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn5) PROCESS_SYNDROME_INLINE(syn5, 80, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn6 = extract_syndrome(m6, v_magic);                     \
-            if (syn6) PROCESS_SYNDROME_INLINE(syn6, 96, ptr_before, 128,       \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn6) PROCESS_SYNDROME_INLINE(syn6, 96, base_offset, 128,      \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
             uint32_t syn7 = extract_syndrome(m7, v_magic);                     \
-            if (syn7) PROCESS_SYNDROME_INLINE(syn7, 112, ptr_before, 128,      \
-                search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+            if (syn7) PROCESS_SYNDROME_INLINE(syn7, 112, base_offset, 128,     \
+                search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
         }                                                                      \
     }                                                                          \
     if (remaining >= 32) goto loop32_nonletter;                                \
@@ -1281,7 +1285,7 @@ loop128_nonletter:                                                             \
                                                                                \
 loop32_nonletter:                                                              \
     while (remaining >= 32 && search_ptr + 32 <= data_end) {                   \
-        unsigned char *ptr_before = search_ptr;                                \
+        int64_t base_offset = search_ptr - search_start;                       \
         uint8x16_t d0 = vld1q_u8(search_ptr);                                  \
         uint8x16_t d1 = vld1q_u8(search_ptr + 16);                             \
         search_ptr += 32;                                                      \
@@ -1291,16 +1295,15 @@ loop32_nonletter:                                                              \
         uint8x16_t m1 = vceqq_u8(d1, v_target1);                               \
                                                                                \
         uint8x16_t any = vorrq_u8(m0, m1);                                     \
-        uint64x2_t any64 = vpaddq_u64(vreinterpretq_u64_u8(any), vreinterpretq_u64_u8(any)); \
-        if (vgetq_lane_u64(any64, 0) == 0) continue;                           \
+        if (vmaxvq_u8(any) == 0) continue;                                     \
                                                                                \
         /* Process chunks explicitly - NO POINTER ARRAYS */                    \
         uint32_t syn0 = extract_syndrome(m0, v_magic);                         \
-        if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, ptr_before, 32,             \
-            search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+        if (syn0) PROCESS_SYNDROME_INLINE(syn0, 0, base_offset, 32,            \
+            search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
         uint32_t syn1 = extract_syndrome(m1, v_magic);                         \
-        if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, ptr_before, 32,            \
-            search_start, search_len, haystack, haystack_len, needle, needle_len, failures, VERIFY_FN); \
+        if (syn1) PROCESS_SYNDROME_INLINE(syn1, 16, base_offset, 32,           \
+            search_len, haystack, haystack_len, needle, needle_len, failures, search_ptr, remaining, search_start, VERIFY_FN); \
     }                                                                          \
     goto loop16_nonletter;                                                     \
                                                                                \
