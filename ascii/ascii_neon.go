@@ -15,6 +15,3 @@ func IndexMask(data string, mask byte) int
 
 //go:noescape
 func EqualFold(a string, b string) bool
-
-//go:noescape
-func indexFoldNEON(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, normNeedle string) int
