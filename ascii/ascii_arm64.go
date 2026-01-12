@@ -75,8 +75,8 @@ func IndexFold(haystack, needle string) int {
 	if len(haystack) < len(needle) {
 		return -1
 	}
-	// O(1) rare byte selection (case-insensitive)
-	rare1, off1, rare2, off2 := selectRarePair(needle, nil, false)
+	// O(1) rare byte selection via sampling (case-insensitive)
+	rare1, off1, rare2, off2 := selectRarePairSample(needle, nil, false)
 	// Pass original needle - C code folds on-the-fly during verification (no alloc)
 	return indexFoldNEONC(haystack, rare1, off1, rare2, off2, needle)
 }

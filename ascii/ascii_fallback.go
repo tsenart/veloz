@@ -144,31 +144,11 @@ func normalizeASCII(s string) string {
 	return string(b)
 }
 
-// selectRarePair finds two rare bytes by sampling 8 positions across the pattern.
-// Returns the two rarest bytes and their offsets, with off1 < off2.
-// If caseSensitive is false, bytes are lowercased and uses case-folded ranks.
+// getRankTable returns the appropriate rank table for rare byte selection.
+// If caseSensitive is true, uses byte ranks directly.
+// If caseSensitive is false, uses case-folded ranks (A and a have same rank).
 // If ranks is nil, uses the default frequency table.
-func selectRarePair(pattern string, ranks []byte, caseSensitive bool) (rare1 byte, off1 int, rare2 byte, off2 int) {
-	n := len(pattern)
-	if n == 0 {
-		return 0, 0, 0, 0
-	}
-
-	// normalize returns the byte to use for comparison
-	normalize := func(b byte) byte {
-		if caseSensitive {
-			return b
-		}
-		return toLower(b)
-	}
-
-	if n == 1 {
-		b := normalize(pattern[0])
-		return b, 0, b, 0
-	}
-
-	// Build rank table
-	var rankTable *[256]uint16
+func getRankTable(ranks []byte, caseSensitive bool) *[256]uint16 {
 	if caseSensitive {
 		// Case-sensitive: use byte ranks directly
 		var directRanks [256]uint16
@@ -181,25 +161,45 @@ func selectRarePair(pattern string, ranks []byte, caseSensitive bool) (rare1 byt
 				directRanks[i] = uint16(ranks[i])
 			}
 		}
-		rankTable = &directRanks
-	} else {
-		// Case-insensitive: use case-folded ranks
-		if ranks == nil {
-			rankTable = &caseFoldRank
-		} else {
-			var customFolded [256]uint16
-			for i := 0; i < 256; i++ {
-				customFolded[i] = uint16(ranks[i])
-			}
-			for b := byte('A'); b <= 'Z'; b++ {
-				lower := b + 0x20
-				sum := uint16(ranks[b]) + uint16(ranks[lower])
-				customFolded[b] = sum
-				customFolded[lower] = sum
-			}
-			rankTable = &customFolded
-		}
+		return &directRanks
 	}
+	// Case-insensitive: use case-folded ranks
+	if ranks == nil {
+		return &caseFoldRank
+	}
+	var customFolded [256]uint16
+	for i := 0; i < 256; i++ {
+		customFolded[i] = uint16(ranks[i])
+	}
+	for b := byte('A'); b <= 'Z'; b++ {
+		lower := b + 0x20
+		sum := uint16(ranks[b]) + uint16(ranks[lower])
+		customFolded[b] = sum
+		customFolded[lower] = sum
+	}
+	return &customFolded
+}
+
+// selectRarePairSample finds two rare bytes by sampling 8 positions across the pattern.
+// O(1) complexity - used by IndexFold for one-shot searches.
+// Returns the two rarest bytes and their offsets, with off1 < off2.
+func selectRarePairSample(pattern string, ranks []byte, caseSensitive bool) (rare1 byte, off1 int, rare2 byte, off2 int) {
+	n := len(pattern)
+	if n == 0 {
+		return 0, 0, 0, 0
+	}
+
+	normalize := toLower
+	if caseSensitive {
+		normalize = func(b byte) byte { return b }
+	}
+
+	if n == 1 {
+		b := normalize(pattern[0])
+		return b, 0, b, 0
+	}
+
+	rankTable := getRankTable(ranks, caseSensitive)
 
 	// Sample 8 positions spread across the pattern
 	pos := [8]int{0, n / 8, (2 * n) / 8, (3 * n) / 8, (4 * n) / 8, (5 * n) / 8, (6 * n) / 8, n - 1}
@@ -229,6 +229,64 @@ func selectRarePair(pattern string, ranks []byte, caseSensitive bool) (rare1 byt
 
 	off1, off2 = pos[best1Idx], pos[best2Idx]
 	rare1, rare2 = normalize(pattern[off1]), normalize(pattern[off2])
+
+	if off1 > off2 {
+		off1, off2 = off2, off1
+		rare1, rare2 = rare2, rare1
+	}
+
+	return rare1, off1, rare2, off2
+}
+
+// selectRarePairFull finds two rare bytes by scanning the entire pattern.
+// O(n) complexity - used by NewSearcher where cost is amortized over many searches.
+// Returns the two rarest bytes and their offsets, with off1 < off2.
+func selectRarePairFull(pattern string, ranks []byte, caseSensitive bool) (rare1 byte, off1 int, rare2 byte, off2 int) {
+	n := len(pattern)
+	if n == 0 {
+		return 0, 0, 0, 0
+	}
+
+	normalize := toLower
+	if caseSensitive {
+		normalize = func(b byte) byte { return b }
+	}
+
+	if n == 1 {
+		b := normalize(pattern[0])
+		return b, 0, b, 0
+	}
+
+	rankTable := getRankTable(ranks, caseSensitive)
+
+	// Scan all positions to find the two rarest distinct bytes
+	best1Byte, best2Byte := normalize(pattern[0]), byte(0)
+	best1Off, best2Off := 0, -1
+	best1Rank := rankTable[best1Byte]
+	best2Rank := uint16(0xFFFF)
+
+	for i := 1; i < n; i++ {
+		c := normalize(pattern[i])
+		r := rankTable[c]
+		if r < best1Rank {
+			// New rarest - shift old best1 to best2 if different byte
+			if c != best1Byte {
+				best2Byte, best2Off, best2Rank = best1Byte, best1Off, best1Rank
+			}
+			best1Byte, best1Off, best1Rank = c, i, r
+		} else if c != best1Byte && r < best2Rank {
+			// New second-rarest (must be different byte from best1)
+			best2Byte, best2Off, best2Rank = c, i, r
+		}
+	}
+
+	// Fallback if no distinct second byte found
+	if best2Off == -1 {
+		return normalize(pattern[0]), 0, normalize(pattern[n-1]), n - 1
+	}
+
+	off1, off2 = best1Off, best2Off
+	rare1, rare2 = best1Byte, best2Byte
 
 	if off1 > off2 {
 		off1, off2 = off2, off1
@@ -279,11 +337,16 @@ func init() {
 
 // NewSearcher creates a Searcher for repeated substring searches.
 // If caseSensitive is false, searches are case-insensitive (ASCII letters only).
+// Uses O(n) full scan for optimal rare byte selection (cost amortized over many searches).
 func NewSearcher(pattern string, caseSensitive bool) Searcher {
-	rare1, off1, rare2, off2 := selectRarePair(pattern, nil, caseSensitive)
+	rare1, off1, rare2, off2 := selectRarePairFull(pattern, nil, caseSensitive)
+	norm := ""
+	if !caseSensitive {
+		norm = normalizeASCII(pattern)
+	}
 	return Searcher{
 		raw:           pattern,
-		norm:          normalizeASCII(pattern),
+		norm:          norm,
 		rare1:         rare1,
 		off1:          off1,
 		rare2:         rare2,
@@ -318,10 +381,14 @@ func NewSearcherWithRanks(pattern string, ranks []byte, caseSensitive bool) Sear
 	if len(ranks) != 256 {
 		panic("ranks must have exactly 256 entries")
 	}
-	rare1, off1, rare2, off2 := selectRarePair(pattern, ranks, caseSensitive)
+	rare1, off1, rare2, off2 := selectRarePairFull(pattern, ranks, caseSensitive)
+	norm := ""
+	if !caseSensitive {
+		norm = normalizeASCII(pattern)
+	}
 	return Searcher{
 		raw:           pattern,
-		norm:          normalizeASCII(pattern),
+		norm:          norm,
 		rare1:         rare1,
 		off1:          off1,
 		rare2:         rare2,

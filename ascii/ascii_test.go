@@ -447,7 +447,7 @@ func BenchmarkAsciiIndexFold(b *testing.B) {
 
 		b.Run(fmt.Sprintf("simd-c-%d", n), func(b *testing.B) {
 			b.SetBytes(int64(len(s1)))
-			rare1, off1, rare2, off2 := selectRarePair(s2, nil, false)
+			rare1, off1, rare2, off2 := selectRarePairSample(s2, nil, false)
 			for i := 0; i < b.N; i++ {
 				indexFoldNEONC(s1, rare1, off1, rare2, off2, s2)
 			}
@@ -492,7 +492,7 @@ func BenchmarkIndexTorture(b *testing.B) {
 	})
 
 	// Compare assembly vs C implementation
-	rare1, off1, rare2, off2 := selectRarePair(benchNeedleTorture, nil, false)
+	rare1, off1, rare2, off2 := selectRarePairSample(benchNeedleTorture, nil, false)
 	b.Run("simd-c", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			indexFoldNEONC(benchInputTorture, rare1, off1, rare2, off2, benchNeedleTorture)
@@ -1057,12 +1057,12 @@ func TestSelectRarePair(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		rare1, _, rare2, _ := selectRarePair(tt.needle, nil, false)
+		rare1, _, rare2, _ := selectRarePairSample(tt.needle, nil, false)
 		// Just verify we get rare bytes, exact selection depends on implementation
 		if rare1 == 0 && len(tt.needle) > 0 {
-			t.Errorf("selectRarePair(%q): rare1 is 0", tt.needle)
+			t.Errorf("selectRarePairSample(%q): rare1 is 0", tt.needle)
 		}
-		t.Logf("selectRarePair(%q) = (%c, %c)", tt.needle, rare1, rare2)
+		t.Logf("selectRarePairSample(%q) = (%c, %c)", tt.needle, rare1, rare2)
 	}
 }
 
@@ -1093,7 +1093,7 @@ func FuzzSelectRarePair(f *testing.F) {
 			return
 		}
 
-		rare1, off1, rare2, off2 := selectRarePair(needle, nil, false)
+		rare1, off1, rare2, off2 := selectRarePairSample(needle, nil, false)
 
 		// Invariant 1: offsets must be in bounds
 		if off1 < 0 || off1 >= len(needle) {
