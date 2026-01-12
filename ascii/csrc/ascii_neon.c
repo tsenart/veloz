@@ -996,6 +996,7 @@ int64_t func_name( \
     /* Search position tracking */                                             \
     unsigned char *search_ptr = haystack + off1;                               \
     unsigned char *search_start = search_ptr;                                  \
+    unsigned char *data_end = haystack + haystack_len;                         \
     int64_t remaining = search_len;                                            \
                                                                                \
     /* Failure counter for adaptive mode switch */                             \
@@ -1015,7 +1016,7 @@ int64_t func_name( \
     goto loop16_letter;                                                        \
                                                                                \
 loop128_letter:                                                                \
-    while (remaining >= 128) {                                                 \
+    while (remaining >= 128 && search_ptr + 128 <= data_end) {                 \
         /* Load 128 bytes (8 x 16-byte vectors) */                             \
         uint8x16_t d0 = vld1q_u8(search_ptr);                                  \
         uint8x16_t d1 = vld1q_u8(search_ptr + 16);                             \
@@ -1153,7 +1154,7 @@ loop128_letter:                                                                \
     goto loop16_letter;                                                        \
                                                                                \
 loop32_letter:                                                                 \
-    while (remaining >= 32) {                                                  \
+    while (remaining >= 32 && search_ptr + 32 <= data_end) {                   \
         uint8x16_t d0 = vld1q_u8(search_ptr);                                  \
         uint8x16_t d1 = vld1q_u8(search_ptr + 16);                             \
         search_ptr += 32;                                                      \
@@ -1199,7 +1200,7 @@ loop32_letter:                                                                 \
     goto loop16_letter;                                                        \
                                                                                \
 loop16_letter:                                                                 \
-    while (remaining >= 16) {                                                  \
+    while (remaining >= 16 && search_ptr + 16 <= data_end) {                   \
         uint8x16_t d = vld1q_u8(search_ptr);                                   \
         search_ptr += 16;                                                      \
         remaining -= 16;                                                       \
@@ -1263,7 +1264,7 @@ nonletter_dispatch:                                                            \
     goto loop16_nonletter;                                                     \
                                                                                \
 loop128_nonletter:                                                             \
-    while (remaining >= 128) {                                                 \
+    while (remaining >= 128 && search_ptr + 128 <= data_end) {                 \
         uint8x16_t d0 = vld1q_u8(search_ptr);                                  \
         uint8x16_t d1 = vld1q_u8(search_ptr + 16);                             \
         uint8x16_t d2 = vld1q_u8(search_ptr + 32);                             \
@@ -1322,7 +1323,7 @@ loop128_nonletter:                                                             \
     goto loop16_nonletter;                                                     \
                                                                                \
 loop32_nonletter:                                                              \
-    while (remaining >= 32) {                                                  \
+    while (remaining >= 32 && search_ptr + 32 <= data_end) {                   \
         uint8x16_t d0 = vld1q_u8(search_ptr);                                  \
         uint8x16_t d1 = vld1q_u8(search_ptr + 16);                             \
         search_ptr += 32;                                                      \
@@ -1366,7 +1367,7 @@ loop32_nonletter:                                                              \
     goto loop16_nonletter;                                                     \
                                                                                \
 loop16_nonletter:                                                              \
-    while (remaining >= 16) {                                                  \
+    while (remaining >= 16 && search_ptr + 16 <= data_end) {                   \
         uint8x16_t d = vld1q_u8(search_ptr);                                   \
         search_ptr += 16;                                                      \
         remaining -= 16;                                                       \
@@ -1426,7 +1427,9 @@ setup_2byte_mode:;                                                             \
     const uint8x16_t v_target2 = vdupq_n_u8(rare2_target);                     \
                                                                                \
     /* 64-byte loop for 2-byte mode (using SHRN for syndrome extraction) */    \
-    while (remaining >= 64) {                                                  \
+    /* Need to ensure both rare1 and rare2 reads stay in bounds */             \
+    while (remaining >= 64 && search_ptr + 64 <= data_end &&                   \
+           haystack + (search_ptr - search_start) + off2 + 64 <= data_end) {   \
         int64_t search_pos = search_ptr - search_start;                        \
                                                                                \
         /* Load rare1 positions */                                             \
@@ -1491,7 +1494,8 @@ setup_2byte_mode:;                                                             \
     }                                                                          \
                                                                                \
     /* 16-byte 2-byte mode loop */                                             \
-    while (remaining >= 16) {                                                  \
+    while (remaining >= 16 && search_ptr + 16 <= data_end &&                   \
+           haystack + (search_ptr - search_start) + off2 + 16 <= data_end) {   \
         int64_t search_pos = search_ptr - search_start;                        \
                                                                                \
         uint8x16_t r1 = vld1q_u8(search_ptr);                                  \
@@ -1521,8 +1525,9 @@ setup_2byte_mode:;                                                             \
         }                                                                      \
     }                                                                          \
                                                                                \
-    /* Scalar 2-byte mode */                                                   \
-    while (remaining > 0) {                                                    \
+    /* Scalar 2-byte mode - ensure rare2 read is in bounds */                  \
+    while (remaining > 0 &&                                                    \
+           haystack + (search_ptr - search_start) + off2 < data_end) {         \
         int64_t search_pos = search_ptr - search_start;                        \
         uint8_t c1 = *search_ptr;                                              \
         uint8_t c2 = *(haystack + search_pos + off2);                          \
