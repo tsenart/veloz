@@ -607,6 +607,11 @@ static inline uint32_t hash_rk_fold(const unsigned char *s, int64_t len) {
     return h;
 }
 
+// SIMD Rabin-Karp with stride-4 parallelism
+// Key insight: Process 4 hash positions per iteration using NEON uint32x4_t.
+// The only loop-carried dependency is H = H*B^4 + S, amortising mul latency by 4.
+// All the folding and t[k] computation is independent of H.
+//
 // gocc: indexFoldRabinKarp(haystack string, needle string) int
 int64_t index_fold_rabin_karp_simd(unsigned char *haystack, int64_t haystack_len,
                                     unsigned char *needle, int64_t needle_len)
@@ -621,51 +626,137 @@ int64_t index_fold_rabin_karp_simd(unsigned char *haystack, int64_t haystack_len
     const uint8x16x2_t table = vld1q_u8_x2(uppercasingTable);
     const uint8x16_t vtbl_shift = vdupq_n_u8(0x60);
     
-    // Precompute constants for standard Rabin-Karp
+    // Precompute constants
     const uint32_t B = PRIME_RK;
     const uint32_t B2 = B * B;
     const uint32_t B3 = B2 * B;
-    const uint32_t B4 = B3 * B;
+    const uint32_t B4 = B2 * B2;
     const uint32_t Bw = pow_prime(w);
-    const uint32_t antisigma = -Bw;  // -B^w mod 2^32
+    const uint32_t antisigma = 0u - Bw;  // -B^w mod 2^32
     
     // Compute target hash (case-folded)
     const uint32_t target_hash = hash_rk_fold(needle, needle_len);
     
-    // For small haystacks, use scalar
-    if (search_len <= 8) {
-        uint32_t hash = hash_rk_fold(haystack, w);
-        
-        if (hash == target_hash && equal_fold_core(haystack, needle, needle_len, table, vtbl_shift)) {
+    // Compute initial hash at position 0
+    uint32_t h0 = hash_rk_fold(haystack, w);
+    
+    // For small search_len, use scalar
+    if (search_len < 4) {
+        uint32_t h = h0;
+        if (h == target_hash && equal_fold_core(haystack, needle, needle_len, table, vtbl_shift)) {
             return 0;
         }
-        
         for (int64_t i = 1; i < search_len; i++) {
-            // Standard roll: hash = hash * B + new + antisigma * old
-            hash = hash * B + fold_table[haystack[i + w - 1]] + antisigma * fold_table[haystack[i - 1]];
-            
-            if (hash == target_hash && equal_fold_core(haystack + i, needle, needle_len, table, vtbl_shift)) {
+            uint32_t oldc = fold_table[haystack[i - 1]];
+            uint32_t newc = fold_table[haystack[i + w - 1]];
+            h = h * B + newc + antisigma * oldc;
+            if (h == target_hash && equal_fold_core(haystack + i, needle, needle_len, table, vtbl_shift)) {
                 return i;
             }
         }
         return -1;
     }
     
-    // Compute initial hash at position 0
-    uint32_t hash = hash_rk_fold(haystack, w);
+    // Build initial 4 hashes (pos 0..3) with 3 scalar rolls
+    uint32_t h1 = h0 * B + fold_table[haystack[w + 0]] + antisigma * fold_table[haystack[0]];
+    uint32_t h2 = h1 * B + fold_table[haystack[w + 1]] + antisigma * fold_table[haystack[1]];
+    uint32_t h3 = h2 * B + fold_table[haystack[w + 2]] + antisigma * fold_table[haystack[2]];
     
-    // Check position 0
-    if (hash == target_hash && equal_fold_core(haystack, needle, needle_len, table, vtbl_shift)) {
-        return 0;
+    uint32x4_t H = (uint32x4_t){ h0, h1, h2, h3 };
+    
+    // Hoist vector constants
+    const uint32x4_t vB   = vdupq_n_u32(B);
+    const uint32x4_t vB2  = vdupq_n_u32(B2);
+    const uint32x4_t vB3  = vdupq_n_u32(B3);
+    const uint32x4_t vB4  = vdupq_n_u32(B4);
+    const uint32x4_t vAnti = vdupq_n_u32(antisigma);
+    const uint32x4_t vTgt = vdupq_n_u32(target_hash);
+    
+    // Folding constants for 16-byte NEON path
+    const uint8x16_t va16   = vdupq_n_u8('a');
+    const uint8x16_t vz16   = vdupq_n_u8('z' - 'a');
+    const uint8x16_t v20_16 = vdupq_n_u8(0x20);
+    
+    int64_t pos = 0;
+    
+    for (;;) {
+        // 1) Check 4 candidates in parallel
+        uint32x4_t eq = vceqq_u32(H, vTgt);
+        if (vmaxvq_u32(eq)) {
+            // Check lanes in order to preserve earliest match semantics
+            if (vgetq_lane_u32(eq, 0) && equal_fold_core(haystack + pos + 0, needle, needle_len, table, vtbl_shift)) return pos + 0;
+            if (vgetq_lane_u32(eq, 1) && equal_fold_core(haystack + pos + 1, needle, needle_len, table, vtbl_shift)) return pos + 1;
+            if (vgetq_lane_u32(eq, 2) && equal_fold_core(haystack + pos + 2, needle, needle_len, table, vtbl_shift)) return pos + 2;
+            if (vgetq_lane_u32(eq, 3) && equal_fold_core(haystack + pos + 3, needle, needle_len, table, vtbl_shift)) return pos + 3;
+        }
+        
+        // No more starts after this block
+        if (pos + 4 >= search_len) break;
+        
+        // Fast vector update needs 8 bytes at hay[pos+w..pos+w+7]
+        // If too close to end, finish with scalar tail
+        if (pos > search_len - 9) break;
+        
+        // 2) Load 16 old bytes and 16 new bytes (we only use 8, but 16-byte loads are same cost)
+        uint8x16_t old16b = vld1q_u8(haystack + pos);
+        uint8x16_t new16b = vld1q_u8(haystack + pos + w);
+        
+        // 3) Fold ASCII to uppercase with NEON (no table lookup)
+        {
+            uint8x16_t x = vsubq_u8(old16b, va16);
+            uint8x16_t m = vcleq_u8(x, vz16);
+            old16b = vsubq_u8(old16b, vandq_u8(m, v20_16));
+        }
+        {
+            uint8x16_t x = vsubq_u8(new16b, va16);
+            uint8x16_t m = vcleq_u8(x, vz16);
+            new16b = vsubq_u8(new16b, vandq_u8(m, v20_16));
+        }
+        
+        // 4) Widen low 8 bytes -> two vectors of 4x u32
+        uint16x8_t old16 = vmovl_u8(vget_low_u8(old16b));
+        uint16x8_t new16 = vmovl_u8(vget_low_u8(new16b));
+        
+        uint32x4_t old0 = vmovl_u16(vget_low_u16(old16));   // old[pos+0..3]
+        uint32x4_t old1 = vmovl_u16(vget_high_u16(old16));  // old[pos+4..7]
+        uint32x4_t new0 = vmovl_u16(vget_low_u16(new16));   // new[pos+0..3]
+        uint32x4_t new1 = vmovl_u16(vget_high_u16(new16));  // new[pos+4..7]
+        
+        // 5) t[k] = new[k] + antisigma*old[k]
+        uint32x4_t t0 = vmlaq_u32(new0, old0, vAnti);  // t[pos+0..3]
+        uint32x4_t t1 = vmlaq_u32(new1, old1, vAnti);  // t[pos+4..7]
+        
+        // 6) Build sliding windows using EXT:
+        //    T0 = [t0,t1,t2,t3], T1 = [t1,t2,t3,t4], T2 = [t2,t3,t4,t5], T3 = [t3,t4,t5,t6]
+        uint32x4_t T0 = t0;
+        uint32x4_t T1 = vextq_u32(t0, t1, 1);
+        uint32x4_t T2 = vextq_u32(t0, t1, 2);
+        uint32x4_t T3 = vextq_u32(t0, t1, 3);
+        
+        // 7) S = T0*B^3 + T1*B^2 + T2*B + T3
+        uint32x4_t S = T3;
+        S = vmlaq_u32(S, T2, vB);
+        S = vmlaq_u32(S, T1, vB2);
+        S = vmlaq_u32(S, T0, vB3);
+        
+        // 8) Advance all 4 hashes: H = H*B^4 + S
+        H = vmlaq_u32(S, H, vB4);
+        
+        pos += 4;
     }
     
-    // Roll through remaining positions
-    for (int64_t i = 1; i < search_len; i++) {
-        // Rolling hash: hash = hash * B + new + old * antisigma
-        hash = hash * B + fold_table[haystack[i + w - 1]] + antisigma * fold_table[haystack[i - 1]];
+    // Scalar tail from the last hash we have (lane 3 = hash at pos+3)
+    {
+        uint32_t h = vgetq_lane_u32(H, 3);
+        int64_t i = pos + 3;
         
-        if (hash == target_hash && equal_fold_core(haystack + i, needle, needle_len, table, vtbl_shift)) {
-            return i;
+        for (int64_t j = i + 1; j < search_len; j++) {
+            uint32_t oldc = fold_table[haystack[j - 1]];
+            uint32_t newc = fold_table[haystack[j + w - 1]];
+            h = h * B + newc + antisigma * oldc;
+            if (h == target_hash && equal_fold_core(haystack + j, needle, needle_len, table, vtbl_shift)) {
+                return j;
+            }
         }
     }
     
