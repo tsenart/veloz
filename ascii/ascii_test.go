@@ -444,6 +444,14 @@ func BenchmarkAsciiIndexFold(b *testing.B) {
 				IndexFold(s1, s2)
 			}
 		})
+
+		b.Run(fmt.Sprintf("simd-c-%d", n), func(b *testing.B) {
+			b.SetBytes(int64(len(s1)))
+			rare1, off1, rare2, off2 := selectRarePair(s2, nil)
+			for i := 0; i < b.N; i++ {
+				indexFoldNEONC(s1, rare1, off1, rare2, off2, s2)
+			}
+		})
 	}
 }
 
@@ -480,6 +488,14 @@ func BenchmarkIndexTorture(b *testing.B) {
 	b.Run("SearchNeedle", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			SearchNeedle(benchInputTorture, needle)
+		}
+	})
+
+	// Compare assembly vs C implementation
+	rare1, off1, rare2, off2 := selectRarePair(benchNeedleTorture, nil)
+	b.Run("simd-c", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			indexFoldNEONC(benchInputTorture, rare1, off1, rare2, off2, benchNeedleTorture)
 		}
 	})
 }

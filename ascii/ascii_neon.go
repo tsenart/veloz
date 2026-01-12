@@ -18,3 +18,6 @@ func EqualFold(a string, b string) bool
 
 //go:noescape
 func indexFoldRabinKarp(haystack string, needle string) int
+
+//go:noescape
+func indexFoldNEONC(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, normNeedle string) int
