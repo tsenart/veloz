@@ -499,9 +499,9 @@ func BenchmarkBoolSearchVsMultipleIndexFold(b *testing.B) {
 	})
 
 	// Also benchmark with needles that are precomputed
-	needles := make([]Needle, len(patterns))
+	needles := make([]Searcher, len(patterns))
 	for i, p := range patterns {
-		needles[i] = MakeNeedle(p)
+		needles[i] = NewSearcher(p, false)
 	}
 
 	b.Run("MultipleSearchNeedle_8_patterns", func(b *testing.B) {
@@ -509,7 +509,7 @@ func BenchmarkBoolSearchVsMultipleIndexFold(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			result := false
 			for _, n := range needles {
-				if SearchNeedle(haystack, n) != -1 {
+				if n.Index(haystack) != -1 {
 					result = true
 					break
 				}

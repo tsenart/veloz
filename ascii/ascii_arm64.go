@@ -75,56 +75,24 @@ func IndexFold(haystack, needle string) int {
 	if len(haystack) < len(needle) {
 		return -1
 	}
-	// O(1) rare byte selection
-	rare1, off1, rare2, off2 := selectRarePair(needle, nil)
+	// O(1) rare byte selection (case-insensitive)
+	rare1, off1, rare2, off2 := selectRarePair(needle, nil, false)
 	// Pass original needle - C code folds on-the-fly during verification (no alloc)
 	return indexFoldNEONC(haystack, rare1, off1, rare2, off2, needle)
 }
 
-// SearchNeedle finds the first case-insensitive match of the precomputed needle in haystack.
-// For repeated searches with the same needle, this is faster than IndexFold
-// because the needle is pre-normalized and rare bytes are pre-computed.
-func SearchNeedle(haystack string, n Needle) int {
-	if len(n.raw) == 0 {
+// Index finds the first occurrence of the pattern in haystack.
+// Uses the case sensitivity specified when the Searcher was created.
+func (s Searcher) Index(haystack string) int {
+	if len(s.raw) == 0 {
 		return 0
 	}
-	if len(haystack) < len(n.raw) {
+	if len(haystack) < len(s.raw) {
 		return -1
 	}
-	// Use pre-normalized needle for faster verification
-	return SearchNeedleFold(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
-}
-
-// Index finds the first case-sensitive occurrence of needle in haystack.
-// Uses SIMD rare-byte filtering for fast substring search.
-func Index(haystack, needle string) int {
-	if len(needle) == 0 {
-		return 0
+	if s.caseSensitive {
+		return IndexNEON(haystack, s.rare1, s.off1, s.rare2, s.off2, s.raw)
 	}
-	if len(haystack) < len(needle) {
-		return -1
-	}
-	// O(1) rare byte selection (returns lowercase bytes, but we need offsets)
-	_, off1, _, off2 := selectRarePair(needle, nil)
-	// For case-sensitive search, use original bytes at those offsets
-	rare1 := needle[off1]
-	rare2 := needle[off2]
-	return IndexNEON(haystack, rare1, off1, rare2, off2, needle)
-}
-
-// SearchNeedleExact finds the first case-sensitive match of the precomputed needle in haystack.
-// For repeated searches with the same needle, this is faster than Index
-// because the rare byte offsets are pre-computed.
-func SearchNeedleExact(haystack string, n Needle) int {
-	if len(n.raw) == 0 {
-		return 0
-	}
-	if len(haystack) < len(n.raw) {
-		return -1
-	}
-	// Get original-case rare bytes from raw needle (n.rare1/rare2 are lowercase)
-	rare1 := n.raw[n.off1]
-	rare2 := n.raw[n.off2]
-	// Use raw needle for exact matching
-	return IndexNEON(haystack, rare1, n.off1, rare2, n.off2, n.raw)
+	// Use pre-normalized pattern for faster case-insensitive verification
+	return SearchNeedleFold(haystack, s.rare1, s.off1, s.rare2, s.off2, s.norm)
 }

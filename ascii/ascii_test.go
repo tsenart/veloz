@@ -447,7 +447,7 @@ func BenchmarkAsciiIndexFold(b *testing.B) {
 
 		b.Run(fmt.Sprintf("simd-c-%d", n), func(b *testing.B) {
 			b.SetBytes(int64(len(s1)))
-			rare1, off1, rare2, off2 := selectRarePair(s2, nil)
+			rare1, off1, rare2, off2 := selectRarePair(s2, nil, false)
 			for i := 0; i < b.N; i++ {
 				indexFoldNEONC(s1, rare1, off1, rare2, off2, s2)
 			}
@@ -484,15 +484,15 @@ func BenchmarkIndexTorture(b *testing.B) {
 	})
 
 	// SearchNeedle with MakeNeedle should auto-detect pathological pattern and use Rabin-Karp
-	needle := MakeNeedle(benchNeedleTorture)
+	needle := NewSearcher(benchNeedleTorture, false)
 	b.Run("SearchNeedle", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			SearchNeedle(benchInputTorture, needle)
+			needle.Index(benchInputTorture)
 		}
 	})
 
 	// Compare assembly vs C implementation
-	rare1, off1, rare2, off2 := selectRarePair(benchNeedleTorture, nil)
+	rare1, off1, rare2, off2 := selectRarePair(benchNeedleTorture, nil, false)
 	b.Run("simd-c", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			indexFoldNEONC(benchInputTorture, rare1, off1, rare2, off2, benchNeedleTorture)
@@ -937,9 +937,9 @@ func TestSearchNeedle(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		n := MakeNeedle(tt.needle)
-		if got := SearchNeedle(tt.haystack, n); got != tt.want {
-			t.Errorf("SearchNeedle(%q, %q) = %d, want %d", tt.haystack, tt.needle, got, tt.want)
+		n := NewSearcher(tt.needle, false)
+		if got := n.Index(tt.haystack); got != tt.want {
+			t.Errorf("%q.Index(%q) = %d, want %d", tt.haystack, tt.needle, got, tt.want)
 		}
 		// Verify against IndexFold
 		if want := IndexFold(tt.haystack, tt.needle); want != tt.want {
@@ -948,8 +948,8 @@ func TestSearchNeedle(t *testing.T) {
 	}
 }
 
-// TestIndex tests the case-sensitive Index function.
-func TestIndex(t *testing.T) {
+// TestSearcherCaseSensitive tests case-sensitive Searcher.Index.
+func TestSearcherCaseSensitive(t *testing.T) {
 	tests := []struct {
 		haystack, needle string
 		want             int
@@ -986,45 +986,13 @@ func TestIndex(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if got := Index(tt.haystack, tt.needle); got != tt.want {
-			t.Errorf("Index(%q, %q) = %d, want %d", tt.haystack, tt.needle, got, tt.want)
+		s := NewSearcher(tt.needle, true) // case-sensitive
+		if got := s.Index(tt.haystack); got != tt.want {
+			t.Errorf("Searcher(%q, true).Index(%q) = %d, want %d", tt.needle, tt.haystack, got, tt.want)
 		}
-	}
-}
-
-// TestSearchNeedleExact tests the case-sensitive SearchNeedleExact function.
-func TestSearchNeedleExact(t *testing.T) {
-	tests := []struct {
-		haystack, needle string
-		want             int
-	}{
-		{"", "", 0},
-		{"", "a", -1},
-		{"a", "", 0},
-		{"abc", "a", 0},
-		{"abc", "A", -1}, // case-sensitive
-		{"abc", "b", 1},
-		{"abc", "B", -1}, // case-sensitive
-		{"hello world", "world", 6},
-		{"Hello World", "hello", -1}, // case-sensitive
-		{"Hello World", "Hello", 0},
-		{"The Quick Brown Fox", "Quick", 4},
-		{"The Quick Brown Fox", "quick", -1}, // case-sensitive
-		// Longer strings
-		{strings.Repeat("a", 100) + "NEEDLE" + strings.Repeat("b", 100), "NEEDLE", 100},
-		{strings.Repeat("a", 100) + "NEEDLE" + strings.Repeat("b", 100), "needle", -1},
-		{strings.Repeat("x", 1000) + "QuIcK", "QuIcK", 1000},
-		{strings.Repeat("x", 1000) + "QuIcK", "quick", -1},
-	}
-
-	for _, tt := range tests {
-		n := MakeNeedle(tt.needle)
-		if got := SearchNeedleExact(tt.haystack, n); got != tt.want {
-			t.Errorf("SearchNeedleExact(%q, %q) = %d, want %d", tt.haystack, tt.needle, got, tt.want)
-		}
-		// Verify against Index
-		if want := Index(tt.haystack, tt.needle); want != tt.want {
-			t.Errorf("Index(%q, %q) = %d, want %d (mismatch with SearchNeedleExact)", tt.haystack, tt.needle, want, tt.want)
+		// Verify against strings.Index
+		if want := strings.Index(tt.haystack, tt.needle); want != tt.want {
+			t.Errorf("strings.Index(%q, %q) = %d, want %d", tt.haystack, tt.needle, want, tt.want)
 		}
 	}
 }
@@ -1056,10 +1024,10 @@ func TestAdaptive(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		n := MakeNeedle(tt.needle)
-		got := SearchNeedle(tt.haystack, n)
+		n := NewSearcher(tt.needle, false)
+		got := n.Index(tt.haystack)
 		if got != tt.want {
-			t.Errorf("SearchNeedle(%q..., %q) = %d, want %d",
+			t.Errorf("%q.Index(%q...) = %d, want %d",
 				truncate(tt.haystack, 30), tt.needle, got, tt.want)
 		}
 	}
@@ -1089,7 +1057,7 @@ func TestSelectRarePair(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		rare1, _, rare2, _ := selectRarePair(tt.needle, nil)
+		rare1, _, rare2, _ := selectRarePair(tt.needle, nil, false)
 		// Just verify we get rare bytes, exact selection depends on implementation
 		if rare1 == 0 && len(tt.needle) > 0 {
 			t.Errorf("selectRarePair(%q): rare1 is 0", tt.needle)
@@ -1125,7 +1093,7 @@ func FuzzSelectRarePair(f *testing.F) {
 			return
 		}
 
-		rare1, off1, rare2, off2 := selectRarePair(needle, nil)
+		rare1, off1, rare2, off2 := selectRarePair(needle, nil, false)
 
 		// Invariant 1: offsets must be in bounds
 		if off1 < 0 || off1 >= len(needle) {
@@ -1183,10 +1151,10 @@ func TestNeedleLengthVariations(t *testing.T) {
 			}
 
 			haystack := strings.Repeat("a", 256) + needle + strings.Repeat("b", 256)
-			n := MakeNeedle(needle)
+			n := NewSearcher(needle, false)
 			want := indexFoldGo(haystack, needle)
 
-			if got := SearchNeedle(haystack, n); got != want {
+			if got := n.Index(haystack); got != want {
 				t.Errorf("got %d, want %d (needle=%q)", got, want, needle)
 			}
 		})
@@ -1206,8 +1174,8 @@ func TestNeedleLengthNotFound(t *testing.T) {
 				needle = string(b)
 			}
 
-			n := MakeNeedle(needle)
-			if got := SearchNeedle(haystack, n); got != -1 {
+			n := NewSearcher(needle, false)
+			if got := n.Index(haystack); got != -1 {
 				t.Errorf("got %d, want -1 (needle=%q)", got, needle)
 			}
 		})
@@ -1216,14 +1184,14 @@ func TestNeedleLengthNotFound(t *testing.T) {
 
 func TestAlignmentVariations(t *testing.T) {
 	needle := "QZXY"
-	n := MakeNeedle(needle)
+	n := NewSearcher(needle, false)
 
 	for align := 0; align <= 127; align++ {
 		t.Run(fmt.Sprintf("align%d", align), func(t *testing.T) {
 			haystack := string(bytes.Repeat([]byte{'a'}, align)) + needle + strings.Repeat("b", 256)
 			want := indexFoldGo(haystack, needle)
 
-			if got := SearchNeedle(haystack, n); got != want {
+			if got := n.Index(haystack); got != want {
 				t.Errorf("got %d, want %d", got, want)
 			}
 		})
@@ -1249,12 +1217,12 @@ func TestChunkBoundaryStraddle(t *testing.T) {
 						b[needleLen-1] = 'Z'
 						needle = string(b)
 					}
-					n := MakeNeedle(needle)
+					n := NewSearcher(needle, false)
 
 					haystack := string(bytes.Repeat([]byte{'a'}, startPos)) + needle + strings.Repeat("b", 256)
 					want := indexFoldGo(haystack, needle)
 
-					if got := SearchNeedle(haystack, n); got != want {
+					if got := n.Index(haystack); got != want {
 						t.Errorf("got %d, want %d", got, want)
 					}
 				})
@@ -1279,10 +1247,10 @@ func TestHighFalsePositiveJSON(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			n := MakeNeedle(needle)
+			n := NewSearcher(needle, false)
 			want := indexFoldGo(tc.haystack, needle)
 
-			if got := SearchNeedle(tc.haystack, n); got != want {
+			if got := n.Index(tc.haystack); got != want {
 				t.Errorf("got %d, want %d", got, want)
 			}
 		})
@@ -1292,10 +1260,10 @@ func TestHighFalsePositiveJSON(t *testing.T) {
 func TestSameCharNeedle(t *testing.T) {
 	haystack := strings.Repeat("a", 10000) + "aab"
 	needle := "aab"
-	n := MakeNeedle(needle)
+	n := NewSearcher(needle, false)
 	want := 10000
 
-	if got := SearchNeedle(haystack, n); got != want {
+	if got := n.Index(haystack); got != want {
 		t.Errorf("got %d, want %d", got, want)
 	}
 }
@@ -1315,8 +1283,8 @@ func TestCaseFolding(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.needle, func(t *testing.T) {
-			n := MakeNeedle(tc.needle)
-			if got := SearchNeedle(tc.haystack, n); got != tc.want {
+			n := NewSearcher(tc.needle, false)
+			if got := n.Index(tc.haystack); got != tc.want {
 				t.Errorf("got %d, want %d", got, tc.want)
 			}
 		})
@@ -1339,8 +1307,8 @@ func TestNeedleEdgeCases(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			n := MakeNeedle(tc.needle)
-			if got := SearchNeedle(tc.haystack, n); got != tc.want {
+			n := NewSearcher(tc.needle, false)
+			if got := n.Index(tc.haystack); got != tc.want {
 				t.Errorf("got %d, want %d", got, tc.want)
 			}
 		})
@@ -1350,9 +1318,9 @@ func TestNeedleEdgeCases(t *testing.T) {
 func TestMultipleMatches(t *testing.T) {
 	haystack := "abcxyzdefxyzghixyz"
 	needle := "xyz"
-	n := MakeNeedle(needle)
+	n := NewSearcher(needle, false)
 
-	if got := SearchNeedle(haystack, n); got != 3 {
+	if got := n.Index(haystack); got != 3 {
 		t.Errorf("got %d, want 3 (first match)", got)
 	}
 }
@@ -1360,14 +1328,14 @@ func TestMultipleMatches(t *testing.T) {
 func TestMatchAtEnd(t *testing.T) {
 	sizes := []int{16, 32, 64, 128, 256, 1024, 4096}
 	needle := "QZXY"
-	n := MakeNeedle(needle)
+	n := NewSearcher(needle, false)
 
 	for _, size := range sizes {
 		t.Run(fmt.Sprintf("size%d", size), func(t *testing.T) {
 			haystack := strings.Repeat("a", size-len(needle)) + needle
 			want := size - len(needle)
 
-			if got := SearchNeedle(haystack, n); got != want {
+			if got := n.Index(haystack); got != want {
 				t.Errorf("got %d, want %d", got, want)
 			}
 		})
@@ -1377,13 +1345,13 @@ func TestMatchAtEnd(t *testing.T) {
 func TestMatchAtStart(t *testing.T) {
 	sizes := []int{16, 32, 64, 128, 256, 1024, 4096}
 	needle := "QZXY"
-	n := MakeNeedle(needle)
+	n := NewSearcher(needle, false)
 
 	for _, size := range sizes {
 		t.Run(fmt.Sprintf("size%d", size), func(t *testing.T) {
 			haystack := needle + strings.Repeat("a", size-len(needle))
 
-			if got := SearchNeedle(haystack, n); got != 0 {
+			if got := n.Index(haystack); got != 0 {
 				t.Errorf("got %d, want 0", got)
 			}
 		})
@@ -1400,7 +1368,7 @@ func BenchmarkSearchNeedle(b *testing.B) {
 	// Before fix: would pick "@0 and "@4 (same byte) -> many false positives
 	// After fix: picks "@0 and M@3 (different bytes) -> fewer false positives
 	jsonNeedle := `"num"`
-	jsonN := MakeNeedle(jsonNeedle)
+	jsonN := NewSearcher(jsonNeedle, false)
 	jsonHaystack := strings.Repeat(`{"key":"value","cnt":123},`, size/26) + `{"num":999}`
 
 	b.Run("json/IndexFold", func(b *testing.B) {
@@ -1413,13 +1381,13 @@ func BenchmarkSearchNeedle(b *testing.B) {
 	b.Run("json/SearchNeedle", func(b *testing.B) {
 		b.SetBytes(int64(len(jsonHaystack)))
 		for i := 0; i < b.N; i++ {
-			SearchNeedle(jsonHaystack, jsonN)
+			jsonN.Index(jsonHaystack)
 		}
 	})
 
 	// Zero false-positive case: needle "quartz" (Q, Z rare), haystack has no Q or Z
 	zeroFPNeedle := "quartz"
-	zeroFPN := MakeNeedle(zeroFPNeedle)
+	zeroFPN := NewSearcher(zeroFPNeedle, false)
 	zeroFPHaystack := strings.Repeat("abcdefghijklmnoprstuvwy ", size/24) + zeroFPNeedle
 
 	b.Run("rare/IndexFold", func(b *testing.B) {
@@ -1432,7 +1400,7 @@ func BenchmarkSearchNeedle(b *testing.B) {
 	b.Run("rare/SearchNeedle", func(b *testing.B) {
 		b.SetBytes(int64(len(zeroFPHaystack)))
 		for i := 0; i < b.N; i++ {
-			SearchNeedle(zeroFPHaystack, zeroFPN)
+			zeroFPN.Index(zeroFPHaystack)
 		}
 	})
 
@@ -1448,7 +1416,7 @@ func BenchmarkSearchNeedle(b *testing.B) {
 	b.Run("notfound/SearchNeedle", func(b *testing.B) {
 		b.SetBytes(int64(len(notFoundHaystack)))
 		for i := 0; i < b.N; i++ {
-			SearchNeedle(notFoundHaystack, zeroFPN)
+			zeroFPN.Index(notFoundHaystack)
 		}
 	})
 }
@@ -1469,7 +1437,7 @@ func BenchmarkNeedleReuse(b *testing.B) {
 		}
 
 		needle := "xylophone"
-		precomputed := MakeNeedle(needle)
+		precomputed := NewSearcher(needle, false)
 
 		var totalBytes int64
 		for _, h := range haystacks {
@@ -1499,7 +1467,7 @@ func BenchmarkNeedleReuse(b *testing.B) {
 			var sink int
 			for i := 0; i < b.N; i++ {
 				for _, h := range haystacks {
-					sink += SearchNeedle(h, precomputed)
+					sink += precomputed.Index(h)
 				}
 			}
 			_ = sink
@@ -1509,9 +1477,9 @@ func BenchmarkNeedleReuse(b *testing.B) {
 			b.SetBytes(totalBytes)
 			var sink int
 			for i := 0; i < b.N; i++ {
-				n := MakeNeedle(needle)
+				n := NewSearcher(needle, false)
 				for _, h := range haystacks {
-					sink += SearchNeedle(h, n)
+					sink += n.Index(h)
 				}
 			}
 			_ = sink
@@ -1595,20 +1563,20 @@ func BenchmarkRankTable(b *testing.B) {
 	}
 
 	for _, tc := range needles {
-		static := MakeNeedle(tc.needle)
-		computed := MakeNeedleWithRanks(tc.needle, ranks[:])
+		static := NewSearcher(tc.needle, false)
+		computed := NewSearcherWithRanks(tc.needle, ranks[:], false)
 
 		b.Run(tc.name+"/Static", func(b *testing.B) {
 			b.SetBytes(int64(len(corpus)))
 			for i := 0; i < b.N; i++ {
-				SearchNeedle(corpus, static)
+				static.Index(corpus)
 			}
 		})
 
 		b.Run(tc.name+"/Computed", func(b *testing.B) {
 			b.SetBytes(int64(len(corpus)))
 			for i := 0; i < b.N; i++ {
-				SearchNeedle(corpus, computed)
+				computed.Index(corpus)
 			}
 		})
 
@@ -1639,20 +1607,20 @@ func BenchmarkRankTableUUID(b *testing.B) {
 	}
 
 	for _, tc := range needles {
-		static := MakeNeedle(tc.needle)
-		computed := MakeNeedleWithRanks(tc.needle, ranks[:])
+		static := NewSearcher(tc.needle, false)
+		computed := NewSearcherWithRanks(tc.needle, ranks[:], false)
 
 		b.Run(tc.name+"/Static", func(b *testing.B) {
 			b.SetBytes(int64(len(corpus)))
 			for i := 0; i < b.N; i++ {
-				SearchNeedle(corpus, static)
+				static.Index(corpus)
 			}
 		})
 
 		b.Run(tc.name+"/Computed", func(b *testing.B) {
 			b.SetBytes(int64(len(corpus)))
 			for i := 0; i < b.N; i++ {
-				SearchNeedle(corpus, computed)
+				computed.Index(corpus)
 			}
 		})
 
@@ -1713,16 +1681,16 @@ func FuzzSearchNeedle(f *testing.F) {
 	f.Add(strings.Repeat("Q", 1000)+"Q"+strings.Repeat("a", 30)+"Z", "Q"+strings.Repeat("a", 30)+"Z")
 
 	f.Fuzz(func(t *testing.T, haystack, needle string) {
-		n := MakeNeedle(needle)
-		got := SearchNeedle(haystack, n)
+		n := NewSearcher(needle, false)
+		got := n.Index(haystack)
 		want := indexFoldGo(haystack, needle)
 		if got != want {
-			t.Fatalf("SearchNeedle(%q, %q) = %d, want %d", haystack, needle, got, want)
+			t.Fatalf("%q.Index(%q) = %d, want %d", haystack, needle, got, want)
 		}
 		// Cross-validate with IndexFold
 		ifRes := IndexFold(haystack, needle)
 		if got != ifRes {
-			t.Fatalf("SearchNeedle vs IndexFold mismatch: SearchNeedle(%q, %q) = %d, IndexFold = %d",
+			t.Fatalf("SearchNeedle vs IndexFold mismatch: %q.Index(%q) = %d, IndexFold = %d",
 				haystack, needle, got, ifRes)
 		}
 	})
@@ -1745,17 +1713,13 @@ func FuzzIndex(f *testing.F) {
 	f.Add(strings.Repeat("y", 31)+"z", "z")
 
 	f.Fuzz(func(t *testing.T, haystack, needle string) {
-		got := Index(haystack, needle)
-		want := strings.Index(haystack, needle)
-		if got != want {
-			t.Fatalf("Index(%q, %q) = %d, want %d", haystack, needle, got, want)
-		}
-		// Cross-validate with SearchNeedleExact
-		n := MakeNeedle(needle)
-		sneGot := SearchNeedleExact(haystack, n)
-		if got != sneGot {
-			t.Fatalf("Index vs SearchNeedleExact mismatch: Index(%q, %q) = %d, SearchNeedleExact = %d",
-				haystack, needle, got, sneGot)
+		got := strings.Index(haystack, needle)
+		// Cross-validate with Searcher (case-sensitive)
+		s := NewSearcher(needle, true)
+		sGot := s.Index(haystack)
+		if got != sGot {
+			t.Fatalf("strings.Index vs Searcher.Index mismatch: strings.Index(%q, %q) = %d, Searcher.Index = %d",
+				haystack, needle, got, sGot)
 		}
 	})
 }

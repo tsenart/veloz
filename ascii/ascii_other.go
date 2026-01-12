@@ -57,8 +57,12 @@ func IndexAnyCharSet(data string, cs CharSet) int {
 	return -1
 }
 
-// SearchNeedle finds the first case-insensitive match of the precomputed needle in haystack.
-// On non-SIMD platforms, this falls back to IndexFold.
-func SearchNeedle(haystack string, n Needle) int {
-	return indexFoldGo(haystack, n.raw)
+// Index finds the first occurrence of the pattern in haystack.
+// Uses the case sensitivity specified when the Searcher was created.
+// On non-SIMD platforms, this falls back to Go implementation.
+func (s Searcher) Index(haystack string) int {
+	if s.caseSensitive {
+		return strings.Index(haystack, s.raw)
+	}
+	return indexFoldGo(haystack, s.raw)
 }

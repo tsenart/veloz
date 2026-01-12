@@ -144,52 +144,79 @@ func normalizeASCII(s string) string {
 	return string(b)
 }
 
-// selectRarePair finds two rare bytes by sampling 8 positions across the needle.
-// Returns the two rarest bytes (lowercase) and their offsets, with off1 < off2.
-// If ranks is nil, uses the default caseFoldRank table (case-insensitive).
-func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 byte, off2 int) {
-	n := len(needle)
+// selectRarePair finds two rare bytes by sampling 8 positions across the pattern.
+// Returns the two rarest bytes and their offsets, with off1 < off2.
+// If caseSensitive is false, bytes are lowercased and uses case-folded ranks.
+// If ranks is nil, uses the default frequency table.
+func selectRarePair(pattern string, ranks []byte, caseSensitive bool) (rare1 byte, off1 int, rare2 byte, off2 int) {
+	n := len(pattern)
 	if n == 0 {
 		return 0, 0, 0, 0
 	}
+
+	// normalize returns the byte to use for comparison
+	normalize := func(b byte) byte {
+		if caseSensitive {
+			return b
+		}
+		return toLower(b)
+	}
+
 	if n == 1 {
-		return toLower(needle[0]), 0, toLower(needle[0]), 0
+		b := normalize(pattern[0])
+		return b, 0, b, 0
 	}
 
-	// Build case-folded rank table pointer
-	var foldedRanks *[256]uint16
-	if ranks == nil {
-		foldedRanks = &caseFoldRank
+	// Build rank table
+	var rankTable *[256]uint16
+	if caseSensitive {
+		// Case-sensitive: use byte ranks directly
+		var directRanks [256]uint16
+		if ranks == nil {
+			for i := 0; i < 256; i++ {
+				directRanks[i] = uint16(byteRank[i])
+			}
+		} else {
+			for i := 0; i < 256; i++ {
+				directRanks[i] = uint16(ranks[i])
+			}
+		}
+		rankTable = &directRanks
 	} else {
-		var customFolded [256]uint16
-		for i := 0; i < 256; i++ {
-			customFolded[i] = uint16(ranks[i])
+		// Case-insensitive: use case-folded ranks
+		if ranks == nil {
+			rankTable = &caseFoldRank
+		} else {
+			var customFolded [256]uint16
+			for i := 0; i < 256; i++ {
+				customFolded[i] = uint16(ranks[i])
+			}
+			for b := byte('A'); b <= 'Z'; b++ {
+				lower := b + 0x20
+				sum := uint16(ranks[b]) + uint16(ranks[lower])
+				customFolded[b] = sum
+				customFolded[lower] = sum
+			}
+			rankTable = &customFolded
 		}
-		for b := byte('A'); b <= 'Z'; b++ {
-			lower := b + 0x20
-			sum := uint16(ranks[b]) + uint16(ranks[lower])
-			customFolded[b] = sum
-			customFolded[lower] = sum
-		}
-		foldedRanks = &customFolded
 	}
 
-	// Sample 8 positions spread across the needle
+	// Sample 8 positions spread across the pattern
 	pos := [8]int{0, n / 8, (2 * n) / 8, (3 * n) / 8, (4 * n) / 8, (5 * n) / 8, (6 * n) / 8, n - 1}
 
 	// Find rarest and second-rarest among samples
 	best1Idx, best2Idx := 0, -1
-	best1Rank := foldedRanks[toLower(needle[pos[0]])]
+	best1Rank := rankTable[normalize(pattern[pos[0]])]
 
 	for i := 1; i < 8; i++ {
-		c := toLower(needle[pos[i]])
-		r := foldedRanks[c]
+		c := normalize(pattern[pos[i]])
+		r := rankTable[c]
 		if r < best1Rank {
 			best2Idx = best1Idx
 			best1Idx = i
 			best1Rank = r
-		} else if best2Idx == -1 || (c != toLower(needle[pos[best1Idx]]) && r < foldedRanks[toLower(needle[pos[best2Idx]])]) {
-			if c != toLower(needle[pos[best1Idx]]) {
+		} else if best2Idx == -1 || (c != normalize(pattern[pos[best1Idx]]) && r < rankTable[normalize(pattern[pos[best2Idx]])]) {
+			if c != normalize(pattern[pos[best1Idx]]) {
 				best2Idx = i
 			}
 		}
@@ -197,11 +224,11 @@ func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 by
 
 	// Fallback if no distinct second byte found
 	if best2Idx == -1 {
-		return toLower(needle[0]), 0, toLower(needle[n-1]), n - 1
+		return normalize(pattern[0]), 0, normalize(pattern[n-1]), n - 1
 	}
 
 	off1, off2 = pos[best1Idx], pos[best2Idx]
-	rare1, rare2 = toLower(needle[off1]), toLower(needle[off2])
+	rare1, rare2 = normalize(pattern[off1]), normalize(pattern[off2])
 
 	if off1 > off2 {
 		off1, off2 = off2, off1
@@ -211,15 +238,17 @@ func selectRarePair(needle string, ranks []byte) (rare1 byte, off1 int, rare2 by
 	return rare1, off1, rare2, off2
 }
 
-// Needle represents a precomputed needle for fast case-insensitive search.
-// Build once with MakeNeedle, reuse with SearchNeedle.
-type Needle struct {
-	raw   string // original needle
-	norm  string // lowercase needle (for verification)
-	rare1 byte   // first rare byte (lowercase)
-	off1  int    // offset in needle
-	rare2 byte   // second rare byte (lowercase)
-	off2  int    // offset in needle
+// Searcher performs fast repeated substring searches.
+// Construct once with NewSearcher, then call Index on multiple haystacks.
+// Amortizes pattern analysis cost across many searches.
+type Searcher struct {
+	raw           string // original pattern
+	norm          string // lowercase pattern (for case-insensitive verification)
+	rare1         byte   // first rare byte (lowercase for case-insensitive)
+	off1          int    // offset in pattern
+	rare2         byte   // second rare byte (lowercase for case-insensitive)
+	off2          int    // offset in pattern
+	caseSensitive bool   // if true, use exact matching
 }
 
 // ByteRank exposes the default frequency table for ASCII bytes (read-only).
@@ -248,22 +277,24 @@ func init() {
 	}
 }
 
-// MakeNeedle precomputes a needle for repeated case-insensitive searches.
-// Uses the default English frequency table for rare-byte selection.
-func MakeNeedle(needle string) Needle {
-	rare1, off1, rare2, off2 := selectRarePair(needle, nil)
-	return Needle{
-		raw:   needle,
-		norm:  normalizeASCII(needle),
-		rare1: rare1,
-		off1:  off1,
-		rare2: rare2,
-		off2:  off2,
+// NewSearcher creates a Searcher for repeated substring searches.
+// If caseSensitive is false, searches are case-insensitive (ASCII letters only).
+func NewSearcher(pattern string, caseSensitive bool) Searcher {
+	rare1, off1, rare2, off2 := selectRarePair(pattern, nil, caseSensitive)
+	return Searcher{
+		raw:           pattern,
+		norm:          normalizeASCII(pattern),
+		rare1:         rare1,
+		off1:          off1,
+		rare2:         rare2,
+		off2:          off2,
+		caseSensitive: caseSensitive,
 	}
 }
 
-// MakeNeedleWithRanks precomputes a needle using a custom byte frequency table.
+// NewSearcherWithRanks creates a Searcher using a custom byte frequency table.
 // The ranks slice must have 256 entries where lower values indicate rarer bytes.
+// If caseSensitive is false, searches are case-insensitive (ASCII letters only).
 //
 // Use this for specialized corpora where byte frequencies differ from English:
 //   - DNA sequences (A, C, G, T equally common)
@@ -283,18 +314,19 @@ func MakeNeedle(needle string) Needle {
 //	for i, c := range counts {
 //	    ranks[i] = byte(c * 255 / maxCount)
 //	}
-func MakeNeedleWithRanks(needle string, ranks []byte) Needle {
+func NewSearcherWithRanks(pattern string, ranks []byte, caseSensitive bool) Searcher {
 	if len(ranks) != 256 {
 		panic("ranks must have exactly 256 entries")
 	}
-	rare1, off1, rare2, off2 := selectRarePair(needle, ranks)
-	return Needle{
-		raw:   needle,
-		norm:  normalizeASCII(needle),
-		rare1: rare1,
-		off1:  off1,
-		rare2: rare2,
-		off2:  off2,
+	rare1, off1, rare2, off2 := selectRarePair(pattern, ranks, caseSensitive)
+	return Searcher{
+		raw:           pattern,
+		norm:          normalizeASCII(pattern),
+		rare1:         rare1,
+		off1:          off1,
+		rare2:         rare2,
+		off2:          off2,
+		caseSensitive: caseSensitive,
 	}
 }
 
