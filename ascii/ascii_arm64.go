@@ -77,8 +77,9 @@ func IndexFold(haystack, needle string) int {
 	if len(haystack) < len(needle) {
 		return -1
 	}
-	// SIMD verification reads 16 bytes, Go fallback for short needles
-	if len(needle) <= 16 {
+	// SIMD verification reads 16 bytes at a time, unsafe for unpadded strings
+	// Fall back to Go for needles where SIMD tail handling could overread
+	if len(needle) <= 32 {
 		return indexFoldGo(haystack, needle)
 	}
 	// O(1) rare byte selection
@@ -110,8 +111,8 @@ func Index(haystack, needle string) int {
 	if len(haystack) < len(needle) {
 		return -1
 	}
-	// SIMD verification reads 16 bytes, use stdlib for short needles
-	if len(needle) <= 16 {
+	// SIMD verification reads 16 bytes at a time, unsafe for unpadded strings
+	if len(needle) <= 32 {
 		return strings.Index(haystack, needle)
 	}
 	// O(1) rare byte selection (returns lowercase bytes, but we need offsets)
