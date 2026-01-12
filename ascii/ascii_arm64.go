@@ -65,7 +65,7 @@ func IndexAny(data, chars string) int {
 // indexFoldRabinKarp is now generated via gocc in ascii_neon.go
 
 // IndexFold finds the first case-insensitive match of needle in haystack.
-// Uses the same optimized NEON path as SearchNeedle but computes rare bytes inline.
+// Uses SIMD rare-byte filtering with on-the-fly case folding.
 func IndexFold(haystack, needle string) int {
 	if len(needle) == 0 {
 		return 0
@@ -73,22 +73,15 @@ func IndexFold(haystack, needle string) int {
 	if len(haystack) < len(needle) {
 		return -1
 	}
-	// For very short haystacks, use Go fallback
-	if len(haystack) < 16 {
-		return indexFoldGo(haystack, needle)
-	}
 	// O(1) rare byte selection
 	rare1, off1, rare2, off2 := selectRarePair(needle, nil)
-	// Pass original needle - assembly normalizes on-the-fly during verification
-	return indexFoldNEON(haystack, rare1, off1, rare2, off2, needle)
+	// Pass original needle - C code folds on-the-fly during verification (no alloc)
+	return indexFoldNEONC(haystack, rare1, off1, rare2, off2, needle)
 }
 
 // SearchNeedle finds the first case-insensitive match of the precomputed needle in haystack.
-// This is the optimized entry point that uses:
-// - memchr's rare byte selection (fewer false positives)
-// - Sneller's compare+XOR normalization (no table lookup)
-// - Sneller's tail masking (no scalar remainder)
-// For repeated searches with the same needle, this is faster than IndexFold.
+// For repeated searches with the same needle, this is faster than IndexFold
+// because the needle is pre-normalized and rare bytes are pre-computed.
 func SearchNeedle(haystack string, n Needle) int {
 	if len(n.raw) == 0 {
 		return 0
@@ -96,9 +89,20 @@ func SearchNeedle(haystack string, n Needle) int {
 	if len(haystack) < len(n.raw) {
 		return -1
 	}
-	// For very short haystacks, use Go fallback
-	if len(haystack) < 16 {
-		return indexFoldGo(haystack, n.raw)
+	// Use pre-normalized needle for faster verification
+	return SearchNeedleFold(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+}
+
+// Index finds the first case-sensitive occurrence of needle in haystack.
+// Uses SIMD rare-byte filtering for fast substring search.
+func Index(haystack, needle string) int {
+	if len(needle) == 0 {
+		return 0
 	}
-	return indexFoldNEON(haystack, n.rare1, n.off1, n.rare2, n.off2, n.norm)
+	if len(haystack) < len(needle) {
+		return -1
+	}
+	// O(1) rare byte selection
+	rare1, off1, rare2, off2 := selectRarePair(needle, nil)
+	return IndexNEON(haystack, rare1, off1, rare2, off2, needle)
 }
