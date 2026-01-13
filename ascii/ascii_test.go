@@ -445,21 +445,6 @@ func BenchmarkAsciiIndexFold(b *testing.B) {
 			}
 		})
 
-		b.Run(fmt.Sprintf("simd-c-%d", n), func(b *testing.B) {
-			b.SetBytes(int64(len(s1)))
-			rare1, off1, rare2, off2 := selectRarePairSample(s2, nil, false)
-			for i := 0; i < b.N; i++ {
-				indexFoldNEONC(s1, rare1, off1, rare2, off2, s2)
-			}
-		})
-
-		b.Run(fmt.Sprintf("memchr-%d", n), func(b *testing.B) {
-			b.SetBytes(int64(len(s1)))
-			rare1, off1, rare2, off2 := selectRarePairSample(s2, nil, false)
-			for i := 0; i < b.N; i++ {
-				IndexFoldMemchr(s1, rare1, off1, rare2, off2, s2)
-			}
-		})
 	}
 }
 
@@ -499,19 +484,6 @@ func BenchmarkIndexTorture(b *testing.B) {
 		}
 	})
 
-	// Compare assembly vs C implementation
-	rare1, off1, rare2, off2 := selectRarePairSample(benchNeedleTorture, nil, false)
-	b.Run("simd-c", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			indexFoldNEONC(benchInputTorture, rare1, off1, rare2, off2, benchNeedleTorture)
-		}
-	})
-
-	b.Run("memchr", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			IndexFoldMemchr(benchInputTorture, rare1, off1, rare2, off2, benchNeedleTorture)
-		}
-	})
 }
 
 func BenchmarkIndexPeriodic(b *testing.B) {
@@ -1385,8 +1357,6 @@ func BenchmarkSearchNeedle(b *testing.B) {
 	jsonN := NewSearcher(jsonNeedle, false)
 	jsonHaystack := strings.Repeat(`{"key":"value","cnt":123},`, size/26) + `{"num":999}`
 
-	jsonRare1, jsonOff1, jsonRare2, jsonOff2 := selectRarePairSample(jsonNeedle, nil, false)
-
 	b.Run("json/IndexFold", func(b *testing.B) {
 		b.SetBytes(int64(len(jsonHaystack)))
 		for i := 0; i < b.N; i++ {
@@ -1401,19 +1371,10 @@ func BenchmarkSearchNeedle(b *testing.B) {
 		}
 	})
 
-	b.Run("json/Memchr", func(b *testing.B) {
-		b.SetBytes(int64(len(jsonHaystack)))
-		for i := 0; i < b.N; i++ {
-			IndexFoldMemchr(jsonHaystack, jsonRare1, jsonOff1, jsonRare2, jsonOff2, jsonNeedle)
-		}
-	})
-
 	// Zero false-positive case: needle "quartz" (Q, Z rare), haystack has no Q or Z
 	zeroFPNeedle := "quartz"
 	zeroFPN := NewSearcher(zeroFPNeedle, false)
 	zeroFPHaystack := strings.Repeat("abcdefghijklmnoprstuvwy ", size/24) + zeroFPNeedle
-	zeroRare1, zeroOff1, zeroRare2, zeroOff2 := selectRarePairSample(zeroFPNeedle, nil, false)
-
 	b.Run("rare/IndexFold", func(b *testing.B) {
 		b.SetBytes(int64(len(zeroFPHaystack)))
 		for i := 0; i < b.N; i++ {
@@ -1425,13 +1386,6 @@ func BenchmarkSearchNeedle(b *testing.B) {
 		b.SetBytes(int64(len(zeroFPHaystack)))
 		for i := 0; i < b.N; i++ {
 			zeroFPN.Index(zeroFPHaystack)
-		}
-	})
-
-	b.Run("rare/Memchr", func(b *testing.B) {
-		b.SetBytes(int64(len(zeroFPHaystack)))
-		for i := 0; i < b.N; i++ {
-			IndexFoldMemchr(zeroFPHaystack, zeroRare1, zeroOff1, zeroRare2, zeroOff2, zeroFPNeedle)
 		}
 	})
 
@@ -1451,12 +1405,6 @@ func BenchmarkSearchNeedle(b *testing.B) {
 		}
 	})
 
-	b.Run("notfound/Memchr", func(b *testing.B) {
-		b.SetBytes(int64(len(notFoundHaystack)))
-		for i := 0; i < b.N; i++ {
-			IndexFoldMemchr(notFoundHaystack, zeroRare1, zeroOff1, zeroRare2, zeroOff2, zeroFPNeedle)
-		}
-	})
 }
 
 // BenchmarkNeedleReuse demonstrates the advantage of precomputing Needle once

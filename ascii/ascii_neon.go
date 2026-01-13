@@ -29,7 +29,4 @@ func indexPrefoldedRabinKarp(haystack string, needle string) int
 func IndexNEON(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int
 
 //go:noescape
-func indexFoldNEONC(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int
-
-//go:noescape
 func SearchNeedleFold(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int

@@ -4,7 +4,7 @@ import "math/bits"
 
 // byteRank is a frequency table for bytes based on corpus analysis.
 // Lower rank = rarer byte = better candidate for rare-byte search.
-// Derived from memchr's BYTE_FREQUENCIES table (corpus: CIA World Factbook,
+// Derived from BYTE_FREQUENCIES table (corpus: CIA World Factbook,
 // rustc source, Septuaginta). UTF-8 prefix bytes (0xC0-0xFF) forced to 255
 // since continuation bytes are more discriminating.
 var byteRank = [256]byte{
@@ -120,7 +120,7 @@ var byteRank = [256]byte{
 	207, 145, 116, 115, 144, 130, 153, 121, 107, 132, 109, 110, 124, 111, 82, 108,
 	118, 141, 113, 129, 119, 125, 165, 117, 92, 106, 83, 72, 99, 93, 65, 79,
 	166, 237, 163, 199, 190, 225, 209, 203, 198, 217, 219, 206, 234, 248, 158, 239,
-	// 0xC0-0xFF: UTF-8 prefix bytes (force to 255 = most common, per memchr)
+	// 0xC0-0xFF: UTF-8 prefix bytes (force to 255 = most common)
 	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
 	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
 	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -137,6 +137,14 @@ func toLower(b byte) byte {
 
 // normalizeASCII converts a string to lowercase ASCII.
 func normalizeASCII(s string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 'A' && s[i] <= 'Z' {
+			goto normalize
+		}
+	}
+	return s
+
+normalize:
 	b := make([]byte, len(s))
 	for i := 0; i < len(s); i++ {
 		b[i] = toLower(s[i])

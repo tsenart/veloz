@@ -77,8 +77,9 @@ func IndexFold(haystack, needle string) int {
 	}
 	// O(1) rare byte selection via sampling (case-insensitive)
 	rare1, off1, rare2, off2 := selectRarePairSample(needle, nil, false)
-	// Pass original needle - C code folds on-the-fly during verification (no alloc)
-	return indexFoldNEONC(haystack, rare1, off1, rare2, off2, needle)
+	// Pre-normalize to lowercase for the assembly verifier.
+	normNeedle := normalizeASCII(needle)
+	return indexFoldNEON(haystack, rare1, off1, rare2, off2, normNeedle)
 }
 
 // Index finds the first occurrence of the pattern in haystack.

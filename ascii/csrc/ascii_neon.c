@@ -1394,7 +1394,7 @@ static inline uint64_t index_fold_process_block(uint8x16_t data, uint8x16_t data
 // IndexFoldNeedle - Optimized case-insensitive search with precomputed needle
 // =============================================================================
 // Combines:
-// - memchr's rare byte selection (variable offsets)
+// - rare byte selection (variable offsets)
 // - Sneller's compare+XOR normalization (no table lookup)
 // - Sneller's tail masking (no scalar remainder loop)
 
@@ -1487,54 +1487,6 @@ __attribute__((always_inline)) static inline bool equal_exact(const unsigned cha
     return true;
 }
 
-// Compare haystack against un-normalized needle using XOR + letter detection
-// For IndexFold where needle is not pre-normalized
-__attribute__((always_inline)) static inline bool equal_fold_both(const unsigned char *a, const unsigned char *b, int64_t len, int64_t haystack_remaining) {
-    const uint8x16_t v_159 = vdupq_n_u8(159);  // -97 as unsigned
-    const uint8x16_t v_26 = vdupq_n_u8(26);
-    const uint8x16_t v_32 = vdupq_n_u8(0x20);
-    
-    while (len >= 16 && haystack_remaining >= 16) {
-        uint8x16_t va = vld1q_u8(a);
-        uint8x16_t vb = vld1q_u8(b);
-        
-        // XOR to find differences
-        uint8x16_t diff = veorq_u8(va, vb);
-        // Check if diff == 0x20 (case difference)
-        uint8x16_t is_case_diff = vceqq_u8(diff, v_32);
-        // Check if byte is a letter: (h|0x20) + 159 < 26
-        uint8x16_t h_lower = vorrq_u8(va, v_32);
-        uint8x16_t h_minus_a = vaddq_u8(h_lower, v_159);
-        uint8x16_t is_letter = vcltq_u8(h_minus_a, v_26);
-        // Mask = 0x20 if (diff==0x20 && is_letter), else 0
-        uint8x16_t case_mask = vandq_u8(vandq_u8(is_case_diff, is_letter), v_32);
-        // Apply mask to diff: zeros out case differences for letters
-        uint8x16_t final_diff = veorq_u8(diff, case_mask);
-        
-        if (vmaxvq_u8(final_diff)) return false;
-        a += 16;
-        b += 16;
-        len -= 16;
-        haystack_remaining -= 16;
-    }
-    if (len > 0) {
-        uint8x16_t mask = vld1q_u8(tail_mask_table[len]);
-        uint8x16_t va = (haystack_remaining >= 16) ? vld1q_u8(a) : load_data16(a, haystack_remaining);
-        uint8x16_t vb = vld1q_u8(b);
-        
-        uint8x16_t diff = veorq_u8(va, vb);
-        uint8x16_t is_case_diff = vceqq_u8(diff, v_32);
-        uint8x16_t h_lower = vorrq_u8(va, v_32);
-        uint8x16_t h_minus_a = vaddq_u8(h_lower, v_159);
-        uint8x16_t is_letter = vcltq_u8(h_minus_a, v_26);
-        uint8x16_t case_mask = vandq_u8(vandq_u8(is_case_diff, is_letter), v_32);
-        uint8x16_t final_diff = vandq_u8(veorq_u8(diff, case_mask), mask);
-        
-        if (vmaxvq_u8(final_diff)) return false;
-    }
-    return true;
-}
-
 // =============================================================================
 // Adaptive Index/IndexFold - Parameterized for max performance
 // =============================================================================
@@ -1547,15 +1499,13 @@ __attribute__((always_inline)) static inline bool equal_fold_both(const unsigned
 // 6. NO POINTER ARRAYS - all chunk processing is explicit/unrolled
 // 7. vld1q_u8_x4 for 64-byte batched loads
 // 8. 64-byte block early exit like handwritten ASM
-//
-// Four entry points via macro instantiation:
+// Three entry points via macro instantiation:
 // - FILTER_FOLD=0, VERIFY=equal_exact:          Index (case-sensitive, single call)
 // - FILTER_FOLD=0, VERIFY=equal_exact:          Searcher.Index (case-sensitive, amortized)
-// - FILTER_FOLD=1, VERIFY=equal_fold_both:      IndexFold (case-insensitive, single call)
 // - FILTER_FOLD=1, VERIFY=equal_fold_normalized: Searcher.IndexFold (case-insensitive, amortized)
 //
 // FILTER_FOLD: 0 = exact matching, 1 = case-folding with OR 0x20
-// VERIFY_FN: verification function (equal_exact, equal_fold_both, equal_fold_normalized)
+// VERIFY_FN: verification function (equal_exact, equal_fold_normalized)
 
 // Fast "any nonzero?" check using ADDP (pairwise add 64-bit lanes)
 // Generates: ADDP Dd, Vn.2D (folds 128->64 bits in ONE instruction)
@@ -1755,12 +1705,6 @@ __attribute__((always_inline)) static inline int64_t func_name( \
                                                                                \
     /* Magic constant for syndrome extraction (2 bits per byte position) */    \
     const uint8x16_t v_magic = vreinterpretq_u8_u64(vdupq_n_u64(0x4010040140100401ULL)); \
-                                                                               \
-    /* Constants for vectorized verification (only used if FILTER_FOLD) */     \
-    const uint8x16_t v_159 = vdupq_n_u8(159);                                  \
-    const uint8x16_t v_26 = vdupq_n_u8(26);                                    \
-    const uint8x16_t v_32 = vdupq_n_u8(0x20);                                  \
-    (void)v_159; (void)v_26; (void)v_32; /* suppress unused warnings */        \
                                                                                \
     /* Search position tracking */                                             \
     unsigned char *search_ptr = haystack + off1;                               \
@@ -2216,31 +2160,91 @@ setup_2byte_mode:;                                                             \
         uint64_t syn2 = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both2), 4)), 0); \
         uint64_t syn3 = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both3), 4)), 0); \
                                                                                \
-        /* Process each chunk's syndrome */                                    \
-        uint64_t syndromes[4] = {syn0, syn1, syn2, syn3};                      \
-        for (int c = 0; c < 4; c++) {                                          \
-            uint64_t syndrome = syndromes[c];                                  \
-            while (syndrome) {                                                 \
-                int bit_pos = __builtin_ctzll(syndrome);                       \
-                int byte_pos = bit_pos >> 2;  /* 4 bits per byte for SHRN */   \
-                int64_t pos_in_search = search_pos + (c * 16) + byte_pos;      \
+        /* Process each chunk's syndrome (unrolled to avoid stack array) */    \
+        uint64_t syndrome = syn0;                                              \
+        while (syndrome) {                                                     \
+            int bit_pos = __builtin_ctzll(syndrome);                           \
+            int byte_pos = bit_pos >> 2;  /* 4 bits per byte for SHRN */       \
+            int64_t pos_in_search = search_pos + byte_pos;                     \
                                                                                \
-                if (pos_in_search <= search_len - 1) {                         \
-                    unsigned char *candidate = haystack + pos_in_search;       \
-                    int64_t cand_remaining = data_end - candidate;             \
-                    if (VERIFY_FN(candidate, needle, needle_len, cand_remaining)) { \
-                        return pos_in_search;                                  \
-                    }                                                          \
-                    failures_2byte++;                                          \
-                    if (failures_2byte > rk_base + (pos_in_search >> 5)) {     \
-                        rk_resume_pos = pos_in_search + 1;                     \
-                        goto fallback_rabin_karp;                              \
-                    }                                                          \
+            if (pos_in_search <= search_len - 1) {                             \
+                unsigned char *candidate = haystack + pos_in_search;           \
+                int64_t cand_remaining = data_end - candidate;                 \
+                if (VERIFY_FN(candidate, needle, needle_len, cand_remaining)) { \
+                    return pos_in_search;                                      \
                 }                                                              \
-                /* Clear nibble */                                             \
-                int clear_pos = ((byte_pos + 1) << 2);                         \
-                syndrome &= ~((1ULL << clear_pos) - 1);                        \
+                failures_2byte++;                                              \
+                if (failures_2byte > rk_base + (pos_in_search >> 5)) {         \
+                    rk_resume_pos = pos_in_search + 1;                         \
+                    goto fallback_rabin_karp;                                  \
+                }                                                              \
             }                                                                  \
+            /* Clear nibble */                                                 \
+            int clear_pos = ((byte_pos + 1) << 2);                             \
+            syndrome &= ~((1ULL << clear_pos) - 1);                            \
+        }                                                                      \
+        syndrome = syn1;                                                       \
+        while (syndrome) {                                                     \
+            int bit_pos = __builtin_ctzll(syndrome);                           \
+            int byte_pos = bit_pos >> 2;                                       \
+            int64_t pos_in_search = search_pos + 16 + byte_pos;                \
+                                                                               \
+            if (pos_in_search <= search_len - 1) {                             \
+                unsigned char *candidate = haystack + pos_in_search;           \
+                int64_t cand_remaining = data_end - candidate;                 \
+                if (VERIFY_FN(candidate, needle, needle_len, cand_remaining)) { \
+                    return pos_in_search;                                      \
+                }                                                              \
+                failures_2byte++;                                              \
+                if (failures_2byte > rk_base + (pos_in_search >> 5)) {         \
+                    rk_resume_pos = pos_in_search + 1;                         \
+                    goto fallback_rabin_karp;                                  \
+                }                                                              \
+            }                                                                  \
+            int clear_pos = ((byte_pos + 1) << 2);                             \
+            syndrome &= ~((1ULL << clear_pos) - 1);                            \
+        }                                                                      \
+        syndrome = syn2;                                                       \
+        while (syndrome) {                                                     \
+            int bit_pos = __builtin_ctzll(syndrome);                           \
+            int byte_pos = bit_pos >> 2;                                       \
+            int64_t pos_in_search = search_pos + 32 + byte_pos;                \
+                                                                               \
+            if (pos_in_search <= search_len - 1) {                             \
+                unsigned char *candidate = haystack + pos_in_search;           \
+                int64_t cand_remaining = data_end - candidate;                 \
+                if (VERIFY_FN(candidate, needle, needle_len, cand_remaining)) { \
+                    return pos_in_search;                                      \
+                }                                                              \
+                failures_2byte++;                                              \
+                if (failures_2byte > rk_base + (pos_in_search >> 5)) {         \
+                    rk_resume_pos = pos_in_search + 1;                         \
+                    goto fallback_rabin_karp;                                  \
+                }                                                              \
+            }                                                                  \
+            int clear_pos = ((byte_pos + 1) << 2);                             \
+            syndrome &= ~((1ULL << clear_pos) - 1);                            \
+        }                                                                      \
+        syndrome = syn3;                                                       \
+        while (syndrome) {                                                     \
+            int bit_pos = __builtin_ctzll(syndrome);                           \
+            int byte_pos = bit_pos >> 2;                                       \
+            int64_t pos_in_search = search_pos + 48 + byte_pos;                \
+                                                                               \
+            if (pos_in_search <= search_len - 1) {                             \
+                unsigned char *candidate = haystack + pos_in_search;           \
+                int64_t cand_remaining = data_end - candidate;                 \
+                if (VERIFY_FN(candidate, needle, needle_len, cand_remaining)) { \
+                    return pos_in_search;                                      \
+                }                                                              \
+                failures_2byte++;                                              \
+                if (failures_2byte > rk_base + (pos_in_search >> 5)) {         \
+                    rk_resume_pos = pos_in_search + 1;                         \
+                    goto fallback_rabin_karp;                                  \
+                }                                                              \
+            }                                                                  \
+            int clear_pos = ((byte_pos + 1) << 2);                             \
+            syndrome &= ~((1ULL << clear_pos) - 1);                            \
         }                                                                      \
     }                                                                          \
                                                                                \
@@ -2327,7 +2331,6 @@ fallback_rabin_karp:;                                                          \
 // Internal implementations (always_inline static via macro)
 // Each variant uses the appropriate Rabin-Karp fallback
 INDEX_IMPL(index_needle_exact_impl, 0, equal_exact, index_exact_rabin_karp_impl)
-INDEX_IMPL(index_needle_fold_both_impl, 1, equal_fold_both, index_fold_rabin_karp_impl)
 INDEX_IMPL(search_needle_fold_norm_impl, 1, equal_fold_normalized, index_prefolded_rabin_karp_impl)
 
 // =============================================================================
@@ -2342,16 +2345,6 @@ __attribute__((noinline)) int64_t index_neon(unsigned char *haystack, int64_t ha
     unsigned char *needle, int64_t needle_len)
 {
     volatile int64_t result = index_needle_exact_impl(haystack, haystack_len, rare1, off1, rare2, off2, needle, needle_len);
-    return result;
-}
-
-// Case-insensitive search (fold on-the-fly) - for IndexFold
-// gocc: indexFoldNEONC(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int
-__attribute__((noinline)) int64_t index_fold_neon_c(unsigned char *haystack, int64_t haystack_len,
-    uint8_t rare1, int64_t off1, uint8_t rare2, int64_t off2,
-    unsigned char *needle, int64_t needle_len)
-{
-    volatile int64_t result = index_needle_fold_both_impl(haystack, haystack_len, rare1, off1, rare2, off2, needle, needle_len);
     return result;
 }
 

@@ -24,7 +24,6 @@ func BenchmarkPureScan(b *testing.B) {
 
 	needleStr := "quartz"
 	needle := NewSearcher(needleStr, false)
-	rare1, off1, rare2, off2 := selectRarePairSample(needleStr, nil, false)
 
 	for _, s := range sizes {
 		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24)
@@ -50,12 +49,6 @@ func BenchmarkPureScan(b *testing.B) {
 			}
 		})
 
-		b.Run(s.name+"/Memchr", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = IndexFoldMemchr(haystack, rare1, off1, rare2, off2, needleStr)
-			}
-		})
 	}
 }
 
@@ -72,7 +65,6 @@ func BenchmarkMatchAtEnd(b *testing.B) {
 
 	needleStr := "xylophone"
 	needle := NewSearcher(needleStr, false)
-	rare1, off1, rare2, off2 := selectRarePairSample(needleStr, nil, false)
 
 	for _, s := range sizes {
 		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24) + needleStr
@@ -98,12 +90,6 @@ func BenchmarkMatchAtEnd(b *testing.B) {
 			}
 		})
 
-		b.Run(s.name+"/Memchr", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = IndexFoldMemchr(haystack, rare1, off1, rare2, off2, needleStr)
-			}
-		})
 	}
 }
 
@@ -389,5 +375,3 @@ func BenchmarkCaseSensitiveNoMatch(b *testing.B) {
 		})
 	}
 }
-
-
