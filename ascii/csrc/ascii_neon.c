@@ -1557,12 +1557,15 @@ __attribute__((always_inline)) static inline bool equal_fold_both(const unsigned
 // FILTER_FOLD: 0 = exact matching, 1 = case-folding with OR 0x20
 // VERIFY_FN: verification function (equal_exact, equal_fold_both, equal_fold_normalized)
 
-// Fast "any nonzero?" check using VADDP (much faster than UMAXV!)
-// Matches handwritten ASM: VADDP V.D2, V.D2, V.D2 then VMOV to scalar
+// Fast "any nonzero?" check using ADDP (pairwise add 64-bit lanes)
+// Generates: ADDP Dd, Vn.2D (folds 128->64 bits in ONE instruction)
+// Then FMOV to scalar for branch test
 __attribute__((always_inline)) static inline uint64_t any_nonzero(uint8x16_t v) {
     uint64x2_t v64 = vreinterpretq_u64_u8(v);
-    uint64x1_t folded = vadd_u64(vget_low_u64(v64), vget_high_u64(v64));
-    return vget_lane_u64(folded, 0);
+    // vpaddq_u64 generates: ADDP Vd.2D, Vn.2D, Vm.2D
+    // When both inputs are the same, it folds the 128-bit vector to 64 bits
+    uint64x2_t folded = vpaddq_u64(v64, v64);
+    return vgetq_lane_u64(folded, 0);
 }
 
 // Helper: Extract 32-bit syndrome from match vector using magic constant
@@ -2155,8 +2158,10 @@ setup_2byte_mode:;                                                             \
     const int64_t off2_delta = off2 - off1;                                    \
                                                                                \
     /* Track failures in 2-byte mode for Rabin-Karp fallback */                \
+    /* Lower threshold for long needles since each verification is expensive */ \
     int64_t failures_2byte = 0;                                                \
-    const int64_t rk_threshold = 8 + (needle_len >> 6);  /* higher for long needles */ \
+    const int64_t rk_threshold = (needle_len >= 64) ? 4 : 8;                  \
+    int64_t rk_resume_pos = 0;                                                 \
                                                                                \
     /* 64-byte loop for 2-byte mode (using SHRN for syndrome extraction) */    \
     /* Need to ensure both rare1 and rare2 reads stay in bounds */             \
@@ -2224,7 +2229,8 @@ setup_2byte_mode:;                                                             \
                         return pos_in_search;                                  \
                     }                                                          \
                     failures_2byte++;                                          \
-                    if (FILTER_FOLD && failures_2byte > rk_threshold) {        \
+                    if (failures_2byte > rk_threshold) {                       \
+                        rk_resume_pos = pos_in_search + 1;                     \
                         goto fallback_rabin_karp;                              \
                     }                                                          \
                 }                                                              \
@@ -2264,7 +2270,8 @@ setup_2byte_mode:;                                                             \
                     return pos_in_search;                                      \
                 }                                                              \
                 failures_2byte++;                                              \
-                if (FILTER_FOLD && failures_2byte > rk_threshold) {            \
+                if (failures_2byte > rk_threshold) {                           \
+                    rk_resume_pos = pos_in_search + 1;                         \
                     goto fallback_rabin_karp;                                  \
                 }                                                              \
             }                                                                  \
@@ -2287,7 +2294,8 @@ setup_2byte_mode:;                                                             \
                     return search_pos;                                         \
                 }                                                              \
                 failures_2byte++;                                              \
-                if (FILTER_FOLD && failures_2byte > rk_threshold) {            \
+                if (failures_2byte > rk_threshold) {                           \
+                    rk_resume_pos = search_pos + 1;                            \
                     goto fallback_rabin_karp;                                  \
                 }                                                              \
             }                                                                  \
@@ -2301,7 +2309,7 @@ setup_2byte_mode:;                                                             \
 fallback_rabin_karp:;                                                          \
     /* Too many false positives in 2-byte mode - switch to Rabin-Karp */       \
     {                                                                          \
-        int64_t start_pos = search_ptr - search_start - off1;                  \
+        int64_t start_pos = rk_resume_pos;                  \
         if (start_pos < 0) start_pos = 0;                                      \
         int64_t rk_result = RK_IMPL(haystack + start_pos, haystack_len - start_pos, \
                                     needle, needle_len);                       \
