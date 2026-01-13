@@ -607,6 +607,139 @@ static inline uint32_t hash_rk_fold(const unsigned char *s, int64_t len) {
     return h;
 }
 
+// =============================================================================
+// Fast NEON block-based initial hashing (reduces dependency depth)
+// =============================================================================
+// Key identity: H(s || t) = H(s) * B^{|t|} + H(t)
+// Instead of ~3000 dependent steps, use ~48 steps for 3KB by hashing 64-byte blocks.
+
+// Fold 16 bytes ASCII: 'a'..'z' -> 'A'..'Z'
+static inline uint8x16_t fold16_ascii_rk(uint8x16_t v,
+                                         uint8x16_t va, uint8x16_t vz, uint8x16_t v20)
+{
+    uint8x16_t x = vsubq_u8(v, va);
+    uint8x16_t m = vcleq_u8(x, vz);
+    return vsubq_u8(v, vandq_u8(m, v20));
+}
+
+// Fold 8 bytes ASCII
+static inline uint8x8_t fold8_ascii_rk(uint8x8_t v,
+                                       uint8x8_t va, uint8x8_t vz, uint8x8_t v20)
+{
+    uint8x8_t x = vsub_u8(v, va);
+    uint8x8_t m = vcle_u8(x, vz);
+    return vsub_u8(v, vand_u8(m, v20));
+}
+
+// Compute hash of 16 folded bytes: b0*B^15 + b1*B^14 + ... + b15
+static inline uint32_t hash16_from_folded(uint8x16_t b,
+                                          uint32x4_t maskFF,
+                                          uint32_t B, uint32_t B2, uint32_t B3,
+                                          uint32x4_t w16 /* {B^12, B^8, B^4, 1} */)
+{
+    // Treat as 4x 32-bit words: word0 = bytes 0..3, word1 = bytes 4..7, etc.
+    uint32x4_t w = vreinterpretq_u32_u8(b);
+
+    // Extract byte-columns across 4 words:
+    // v0 lanes: [b0,b4,b8,b12], v1: [b1,b5,b9,b13], ...
+    uint32x4_t v0 = vandq_u32(w, maskFF);
+    uint32x4_t v1 = vandq_u32(vshrq_n_u32(w, 8), maskFF);
+    uint32x4_t v2 = vandq_u32(vshrq_n_u32(w, 16), maskFF);
+    uint32x4_t v3 = vshrq_n_u32(w, 24);
+
+    // q lane j = b[4j+0]*B^3 + b[4j+1]*B^2 + b[4j+2]*B + b[4j+3]
+    uint32x4_t q = vmlaq_n_u32(v3, v2, B);
+    q = vmlaq_n_u32(q, v1, B2);
+    q = vmlaq_n_u32(q, v0, B3);
+
+    // hash16 = q0*B^12 + q1*B^8 + q2*B^4 + q3
+    uint32x4_t prod = vmulq_u32(q, w16);
+    return vaddvq_u32(prod);
+}
+
+// Compute hash of 64 bytes with folding
+static inline uint32_t hash64_fold_neon(const uint8_t *p,
+                                        uint8x16_t va, uint8x16_t vz, uint8x16_t v20,
+                                        uint32x4_t maskFF,
+                                        uint32_t B, uint32_t B2, uint32_t B3,
+                                        uint32x4_t w16, uint32x4_t w64 /* {B^48, B^32, B^16, 1} */)
+{
+    uint8x16_t b0 = fold16_ascii_rk(vld1q_u8(p +  0), va, vz, v20);
+    uint8x16_t b1 = fold16_ascii_rk(vld1q_u8(p + 16), va, vz, v20);
+    uint8x16_t b2 = fold16_ascii_rk(vld1q_u8(p + 32), va, vz, v20);
+    uint8x16_t b3 = fold16_ascii_rk(vld1q_u8(p + 48), va, vz, v20);
+
+    uint32_t h0 = hash16_from_folded(b0, maskFF, B, B2, B3, w16);
+    uint32_t h1 = hash16_from_folded(b1, maskFF, B, B2, B3, w16);
+    uint32_t h2 = hash16_from_folded(b2, maskFF, B, B2, B3, w16);
+    uint32_t h3 = hash16_from_folded(b3, maskFF, B, B2, B3, w16);
+
+    // hash64 = h0*B^48 + h1*B^32 + h2*B^16 + h3
+    uint32x4_t hv = (uint32x4_t){h0, h1, h2, h3};
+    return vaddvq_u32(vmulq_u32(hv, w64));
+}
+
+// Compute two hashes in one pass (needle and hay[0:w]) for better ILP
+static inline void hash2_rk_fold_neon_fast(const uint8_t *a,
+                                           const uint8_t *b,
+                                           int64_t len,
+                                           uint32_t *out_a,
+                                           uint32_t *out_b)
+{
+    const uint32_t B   = PRIME_RK;
+    const uint32_t B2  = B * B;
+    const uint32_t B3  = B2 * B;
+    const uint32_t B4  = B2 * B2;
+    const uint32_t B8  = B4 * B4;
+    const uint32_t B12 = B8 * B4;
+    const uint32_t B16 = B8 * B8;
+    const uint32_t B32 = B16 * B16;
+    const uint32_t B48 = B32 * B16;
+    const uint32_t B64 = B32 * B32;
+
+    const uint32x4_t maskFF = vdupq_n_u32(0xFFu);
+    const uint32x4_t w16 = (uint32x4_t){ B12, B8, B4, 1u };
+    const uint32x4_t w64 = (uint32x4_t){ B48, B32, B16, 1u };
+
+    const uint8x16_t va16  = vdupq_n_u8('a');
+    const uint8x16_t vz16  = vdupq_n_u8('z' - 'a');
+    const uint8x16_t v20_16= vdupq_n_u8(0x20u);
+
+    uint32_t ha = 0u, hb = 0u;
+    int64_t i = 0;
+
+    // 64-byte blocks: dependency depth ~ len/64
+    for (; i + 64 <= len; i += 64) {
+        uint32_t ba = hash64_fold_neon(a + i, va16, vz16, v20_16,
+                                       maskFF, B, B2, B3, w16, w64);
+        uint32_t bb = hash64_fold_neon(b + i, va16, vz16, v20_16,
+                                       maskFF, B, B2, B3, w16, w64);
+        ha = ha * B64 + ba;
+        hb = hb * B64 + bb;
+    }
+
+    // 16-byte blocks
+    for (; i + 16 <= len; i += 16) {
+        uint8x16_t fa = fold16_ascii_rk(vld1q_u8(a + i), va16, vz16, v20_16);
+        uint8x16_t fb = fold16_ascii_rk(vld1q_u8(b + i), va16, vz16, v20_16);
+
+        uint32_t ba = hash16_from_folded(fa, maskFF, B, B2, B3, w16);
+        uint32_t bb = hash16_from_folded(fb, maskFF, B, B2, B3, w16);
+
+        ha = ha * B16 + ba;
+        hb = hb * B16 + bb;
+    }
+
+    // tail bytes
+    for (; i < len; i++) {
+        ha = ha * B + fold_table[a[i]];
+        hb = hb * B + fold_table[b[i]];
+    }
+
+    *out_a = ha;
+    *out_b = hb;
+}
+
 // SIMD Rabin-Karp with stride-4 parallelism
 // Key insight: Process 4 hash positions per iteration using NEON uint32x4_t.
 // The only loop-carried dependency is H = H*B^4 + S, amortising mul latency by 4.
@@ -634,11 +767,10 @@ int64_t index_fold_rabin_karp_simd(unsigned char *haystack, int64_t haystack_len
     const uint32_t Bw = pow_prime(w);
     const uint32_t antisigma = 0u - Bw;  // -B^w mod 2^32
     
-    // Compute target hash (case-folded)
-    const uint32_t target_hash = hash_rk_fold(needle, needle_len);
-    
-    // Compute initial hash at position 0
-    uint32_t h0 = hash_rk_fold(haystack, w);
+    // Fast initial hashes: compute needle and hay[0:w] together using NEON block hashing
+    // This reduces dependency depth from ~w to ~w/64 for long needles
+    uint32_t target_hash, h0;
+    hash2_rk_fold_neon_fast(needle, haystack, w, &target_hash, &h0);
     
     // For small search_len, use scalar
     if (search_len < 4) {
@@ -657,7 +789,7 @@ int64_t index_fold_rabin_karp_simd(unsigned char *haystack, int64_t haystack_len
         return -1;
     }
     
-    // Build initial 4 hashes (pos 0..3) with 3 scalar rolls
+    // Build initial 4 hashes (pos 0..3) with 3 scalar rolls from h0
     uint32_t h1 = h0 * B + fold_table[haystack[w + 0]] + antisigma * fold_table[haystack[0]];
     uint32_t h2 = h1 * B + fold_table[haystack[w + 1]] + antisigma * fold_table[haystack[1]];
     uint32_t h3 = h2 * B + fold_table[haystack[w + 2]] + antisigma * fold_table[haystack[2]];
@@ -1071,41 +1203,77 @@ __attribute__((always_inline)) static inline uint32_t extract_syndrome(uint8x16_
     return vget_lane_u32(vreinterpret_u32_u8(sum2), 0);
 }
 
-// Helper: Extract 16-bit bitmask from 16-byte match vector (1 bit per byte)
-// Uses PMULL polynomial multiply to gather MSBs efficiently
-__attribute__((always_inline)) static inline uint16_t extract_bitmask16(uint8x16_t match) {
-    // match has 0xFF (match) or 0x00 (no match) in each lane
-    // We want: bit i = 1 if match[i] != 0
-    
-    // Method: use USRA (shift right and accumulate) chain to pack bits
-    // First get just the MSB of each byte (0x80 or 0x00)
-    uint8x16_t msb = vshrq_n_u8(match, 7);  // Now 0x01 or 0x00
-    
-    // Pack using multiply-add: multiply by powers of 2 and sum
-    // Use ADDV with pre-weighted bytes
-    static const uint8_t weights[16] = {
-        1, 2, 4, 8, 16, 32, 64, 128,  // Low 8 bits
-        1, 2, 4, 8, 16, 32, 64, 128   // High 8 bits (will go to second byte)
-    };
-    uint8x16_t weight_vec = vld1q_u8(weights);
-    uint8x16_t weighted = vmulq_u8(msb, weight_vec);
-    
-    // Sum low 8 bytes → low byte of result, high 8 bytes → high byte
-    uint8x8_t lo = vget_low_u8(weighted);
-    uint8x8_t hi = vget_high_u8(weighted);
-    uint8_t lo_sum = vaddv_u8(lo);
-    uint8_t hi_sum = vaddv_u8(hi);
-    
-    return lo_sum | ((uint16_t)hi_sum << 8);
+// Extract 64-bit syndrome from 16-byte match vector using SHRN (2 instructions!)
+// SHRN $4 gives us 4 bits per input byte-pair with nibble-level precision:
+//   High nibble (0xF0) set = even byte matched (position 0, 2, 4, ...)
+//   Low nibble (0x0F) set = odd byte matched (position 1, 3, 5, ...)
+// This is FASTER than handwritten ASM's PADD approach!
+__attribute__((always_inline)) static inline uint64_t extract_syndrome_shrn(uint8x16_t match) {
+    uint8x8_t narrowed = vshrn_n_u16(vreinterpretq_u16_u8(match), 4);
+    return vget_lane_u64(vreinterpret_u64_u8(narrowed), 0);
 }
 
-// Extract 64-bit bitmask from 4 match vectors (64 bytes → 64 bits)
+// Pack 16 nibble bits into 16 bits using parallel bit deposit
+// Input: 64-bit value with 1 bit per nibble (after AND with 0x1111...)
+// Output: 16-bit value with those bits packed contiguously
+__attribute__((always_inline)) static inline uint16_t pack_nibble_bits(uint64_t n) {
+    // Each nibble has a single bit set (0 or 1)
+    // Nibble i is at bits [4i, 4i+3], we want bit i of output
+    // Use parallel extraction: shift and OR
+    // 
+    // Layout: n = [n15 n14 n13 n12 n11 n10 n9 n8 | n7 n6 n5 n4 n3 n2 n1 n0]
+    //         where each nx is a nibble (4 bits) containing 0 or 1
+    //
+    // We want: result[i] = n[4i] for i in 0..15
+    
+    // Gather using multiplication by magic constant
+    // Each nibble is 0 or 1, multiply gathers them
+    // 
+    // Alternative: use cascading shifts
+    // n = 0x?0?0?0?0?0?0?0?0 where ? is 0 or 1
+    // We want to collect the LSB of each nibble
+    
+    // Step 1: collect pairs of nibbles into bytes
+    // bit 0,1 from nibbles 0,1 → byte 0 bits 0,1
+    uint64_t t = n;
+    t = (t | (t >> 3)) & 0x0303030303030303ULL;  // Pack pairs of nibble-bits into 2 bits per byte
+    // Now each byte has bits in positions 0,1
+    
+    // Step 2: collect pairs of bytes into halfwords  
+    t = (t | (t >> 6)) & 0x000F000F000F000FULL;  // Pack pairs of bytes into 4 bits per halfword
+    
+    // Step 3: collect pairs of halfwords into words
+    t = (t | (t >> 12)) & 0x000000FF000000FFULL; // Pack into 8 bits per word
+    
+    // Step 4: collect into final 16 bits
+    t = (t | (t >> 24)) & 0xFFFF;
+    
+    return (uint16_t)t;
+}
+
+// Extract 64-bit bitmask from 4 match vectors using SHRN
+// 64 bytes → 64 bits (1 bit per byte)
 __attribute__((always_inline)) static inline uint64_t extract_bitmask64(
     uint8x16_t m0, uint8x16_t m1, uint8x16_t m2, uint8x16_t m3) {
-    uint16_t b0 = extract_bitmask16(m0);
-    uint16_t b1 = extract_bitmask16(m1);
-    uint16_t b2 = extract_bitmask16(m2);
-    uint16_t b3 = extract_bitmask16(m3);
+    // SHRN gives 8 bytes per 16-byte chunk, with nibble precision
+    uint64_t s0 = extract_syndrome_shrn(m0);
+    uint64_t s1 = extract_syndrome_shrn(m1);
+    uint64_t s2 = extract_syndrome_shrn(m2);
+    uint64_t s3 = extract_syndrome_shrn(m3);
+    
+    // Extract LSB of each nibble
+    const uint64_t nibble_lsb = 0x1111111111111111ULL;
+    uint64_t n0 = s0 & nibble_lsb;
+    uint64_t n1 = s1 & nibble_lsb;
+    uint64_t n2 = s2 & nibble_lsb;
+    uint64_t n3 = s3 & nibble_lsb;
+    
+    // Pack each into 16 bits
+    uint16_t b0 = pack_nibble_bits(n0);
+    uint16_t b1 = pack_nibble_bits(n1);
+    uint16_t b2 = pack_nibble_bits(n2);
+    uint16_t b3 = pack_nibble_bits(n3);
+    
     return (uint64_t)b0 | ((uint64_t)b1 << 16) | ((uint64_t)b2 << 32) | ((uint64_t)b3 << 48);
 }
 
