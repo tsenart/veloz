@@ -1195,6 +1195,14 @@ __attribute__((always_inline)) static inline bool equal_fold_both(const unsigned
 // FILTER_FOLD: 0 = exact matching, 1 = case-folding with OR 0x20
 // VERIFY_FN: verification function (equal_exact, equal_fold_both, equal_fold_normalized)
 
+// Fast "any nonzero?" check using VADDP (much faster than UMAXV!)
+// Matches handwritten ASM: VADDP V.D2, V.D2, V.D2 then VMOV to scalar
+__attribute__((always_inline)) static inline uint64_t any_nonzero(uint8x16_t v) {
+    uint64x2_t v64 = vreinterpretq_u64_u8(v);
+    uint64x1_t folded = vadd_u64(vget_low_u64(v64), vget_high_u64(v64));
+    return vget_lane_u64(folded, 0);
+}
+
 // Helper: Extract 32-bit syndrome from match vector using magic constant
 __attribute__((always_inline)) static inline uint32_t extract_syndrome(uint8x16_t match_vec, uint8x16_t magic_vec) {
     uint8x16_t masked = vandq_u8(match_vec, magic_vec);
@@ -1435,7 +1443,7 @@ loop128_letter:                                                                \
         uint8x16_t any0123 = vorrq_u8(vorrq_u8(m0, m1), vorrq_u8(m2, m3));     \
         uint8x16_t any4567 = vorrq_u8(vorrq_u8(m4, m5), vorrq_u8(m6, m7));     \
         uint8x16_t any_all = vorrq_u8(any0123, any4567);                       \
-        if (vmaxvq_u8(any_all) == 0) continue;                                 \
+        if (any_nonzero(any_all) == 0) continue;                                 \
                                                                                \
         /* Build 128-bit syndrome: 1 bit per byte position */                  \
         /* This prevents LLVM from pre-computing haystack+offset pointers */   \
@@ -1460,7 +1468,7 @@ loop32_letter:                                                                 \
         uint8x16_t m1 = vceqq_u8(vorrq_u8(d1, v_mask1), v_target1);            \
                                                                                \
         uint8x16_t any = vorrq_u8(m0, m1);                                     \
-        if (vmaxvq_u8(any) == 0) continue;                                     \
+        if (any_nonzero(any) == 0) continue;                                     \
                                                                                \
         /* Process chunks explicitly - NO POINTER ARRAYS */                    \
         uint32_t syn0 = extract_syndrome(m0, v_magic);                         \
@@ -1563,7 +1571,7 @@ loop128_nonletter:                                                             \
         uint8x16_t any0123 = vorrq_u8(vorrq_u8(m0, m1), vorrq_u8(m2, m3));     \
         uint8x16_t any4567 = vorrq_u8(vorrq_u8(m4, m5), vorrq_u8(m6, m7));     \
         uint8x16_t any_all = vorrq_u8(any0123, any4567);                       \
-        if (vmaxvq_u8(any_all) == 0) continue;                                 \
+        if (any_nonzero(any_all) == 0) continue;                                 \
                                                                                \
         /* Build 128-bit syndrome: 1 bit per byte position */                  \
         uint64_t syn_lo = extract_bitmask64(m0, m1, m2, m3);                   \
@@ -1587,7 +1595,7 @@ loop32_nonletter:                                                              \
         uint8x16_t m1 = vceqq_u8(d1, v_target1);                               \
                                                                                \
         uint8x16_t any = vorrq_u8(m0, m1);                                     \
-        if (vmaxvq_u8(any) == 0) continue;                                     \
+        if (any_nonzero(any) == 0) continue;                                     \
                                                                                \
         /* Process chunks explicitly - NO POINTER ARRAYS */                    \
         uint32_t syn0 = extract_syndrome(m0, v_magic);                         \
@@ -1708,14 +1716,18 @@ setup_2byte_mode:;                                                             \
                                                                                \
         /* Quick check using vmaxv */                                          \
         uint8x16_t any = vorrq_u8(vorrq_u8(both0, both1), vorrq_u8(both2, both3)); \
-        if (vmaxvq_u8(any) == 0) continue;                                     \
+        if (any_nonzero(any) == 0) continue;                                     \
                                                                                \
-        /* Extract syndromes using SHRN (4 bits per byte) */                   \
-        uint8x16_t *chunks[4] = {&both0, &both1, &both2, &both3};              \
+        /* Extract syndromes using SHRN - unrolled to avoid pointer array */    \
+        uint64_t syn0 = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both0), 4)), 0); \
+        uint64_t syn1 = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both1), 4)), 0); \
+        uint64_t syn2 = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both2), 4)), 0); \
+        uint64_t syn3 = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both3), 4)), 0); \
+                                                                               \
+        /* Process each chunk's syndrome */                                    \
+        uint64_t syndromes[4] = {syn0, syn1, syn2, syn3};                      \
         for (int c = 0; c < 4; c++) {                                          \
-            uint64_t syndrome = vget_lane_u64(                                 \
-                vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(*chunks[c]), 4)), 0); \
-                                                                               \
+            uint64_t syndrome = syndromes[c];                                  \
             while (syndrome) {                                                 \
                 int bit_pos = __builtin_ctzll(syndrome);                       \
                 int byte_pos = bit_pos >> 2;  /* 4 bits per byte for SHRN */   \
