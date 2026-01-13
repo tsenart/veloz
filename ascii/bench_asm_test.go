@@ -47,13 +47,6 @@ func BenchmarkAsmVsCgo(b *testing.B) {
                 indexFoldNEON(s1, rare1, off1, rare2, off2, norm)
             }
         })
-
-        b.Run(fmt.Sprintf("simple-%d", n), func(b *testing.B) {
-            b.SetBytes(int64(len(s1)))
-            for i := 0; i < b.N; i++ {
-                SearchNeedleFoldSimple(s1, rare1, off1, rare2, off2, norm)
-            }
-        })
     }
 }
 
@@ -133,13 +126,6 @@ func BenchmarkSimpleLargeInput(b *testing.B) {
     norm := strings.ToLower(needle)
     rare1, off1, rare2, off2 := selectRarePairSample(needle, nil, false)
     haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", size/24) + needle
-
-    b.Run("simple-1MB", func(b *testing.B) {
-        b.SetBytes(int64(len(haystack)))
-        for i := 0; i < b.N; i++ {
-            SearchNeedleFoldSimple(haystack, rare1, off1, rare2, off2, norm)
-        }
-    })
 
     b.Run("asm-1MB", func(b *testing.B) {
         b.SetBytes(int64(len(haystack)))

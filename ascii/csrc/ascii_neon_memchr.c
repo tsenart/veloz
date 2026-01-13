@@ -150,7 +150,136 @@ int64_t index_fold_memchr(
     const unsigned char *search_start = p;
     int64_t remaining = search_len;
     
-    // 64-byte main loop for throughput
+    // 128-byte main loop for large inputs
+    while (remaining >= 128 && p + 128 <= data_end) {
+        // Load and compare first 64 bytes
+        uint8x16_t v0 = vld1q_u8(p);
+        uint8x16_t v1 = vld1q_u8(p + 16);
+        uint8x16_t v2 = vld1q_u8(p + 32);
+        uint8x16_t v3 = vld1q_u8(p + 48);
+        uint8x16_t c0 = vceqq_u8(vorrq_u8(v0, v_mask), v_target);
+        uint8x16_t c1 = vceqq_u8(vorrq_u8(v1, v_mask), v_target);
+        uint8x16_t c2 = vceqq_u8(vorrq_u8(v2, v_mask), v_target);
+        uint8x16_t c3 = vceqq_u8(vorrq_u8(v3, v_mask), v_target);
+        uint8x16_t or0123 = vorrq_u8(vorrq_u8(c0, c1), vorrq_u8(c2, c3));
+        
+        // Load and compare second 64 bytes
+        uint8x16_t v4 = vld1q_u8(p + 64);
+        uint8x16_t v5 = vld1q_u8(p + 80);
+        uint8x16_t v6 = vld1q_u8(p + 96);
+        uint8x16_t v7 = vld1q_u8(p + 112);
+        uint8x16_t c4 = vceqq_u8(vorrq_u8(v4, v_mask), v_target);
+        uint8x16_t c5 = vceqq_u8(vorrq_u8(v5, v_mask), v_target);
+        uint8x16_t c6 = vceqq_u8(vorrq_u8(v6, v_mask), v_target);
+        uint8x16_t c7 = vceqq_u8(vorrq_u8(v7, v_mask), v_target);
+        uint8x16_t or4567 = vorrq_u8(vorrq_u8(c4, c5), vorrq_u8(c6, c7));
+        
+        // Quick check: any matches in 128 bytes?
+        uint8x16_t any_all = vorrq_u8(or0123, or4567);
+        uint64x2_t any64 = vreinterpretq_u64_u8(any_all);
+        if ((vgetq_lane_u64(any64, 0) | vgetq_lane_u64(any64, 1)) == 0) {
+            p += 128;
+            remaining -= 128;
+            continue;
+        }
+        
+        // Process first 64 bytes if any matches
+        uint64x2_t first64 = vreinterpretq_u64_u8(or0123);
+        if (vgetq_lane_u64(first64, 0) | vgetq_lane_u64(first64, 1)) {
+            uint64_t syn;
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c0), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_both(haystack + pos, needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c1), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 16 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_both(haystack + pos, needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c2), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 32 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_both(haystack + pos, needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c3), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 48 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_both(haystack + pos, needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+        }
+        
+        // Process second 64 bytes if any matches
+        uint64x2_t second64 = vreinterpretq_u64_u8(or4567);
+        if (vgetq_lane_u64(second64, 0) | vgetq_lane_u64(second64, 1)) {
+            uint64_t syn;
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c4), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 64 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_both(haystack + pos, needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c5), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 80 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_both(haystack + pos, needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c6), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 96 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_both(haystack + pos, needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c7), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 112 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_both(haystack + pos, needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+        }
+        
+        p += 128;
+        remaining -= 128;
+    }
+    
+    // 64-byte loop for remaining
     while (remaining >= 64 && p + 64 <= data_end) {
         uint8x16_t v0 = vld1q_u8(p);
         uint8x16_t v1 = vld1q_u8(p + 16);
@@ -182,7 +311,6 @@ int64_t index_fold_memchr(
             }
             syn &= ~(0xFULL << (bpos * 4));
         }
-        
         syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c1), 4)), 0);
         while (syn) {
             int bit = __builtin_ctzll(syn);
@@ -193,7 +321,6 @@ int64_t index_fold_memchr(
             }
             syn &= ~(0xFULL << (bpos * 4));
         }
-        
         syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c2), 4)), 0);
         while (syn) {
             int bit = __builtin_ctzll(syn);
@@ -204,7 +331,6 @@ int64_t index_fold_memchr(
             }
             syn &= ~(0xFULL << (bpos * 4));
         }
-        
         syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c3), 4)), 0);
         while (syn) {
             int bit = __builtin_ctzll(syn);
@@ -269,7 +395,33 @@ int64_t index_fold_memchr(
         remaining -= 32;
     }
     
-    // Scalar tail
+    // 16-byte loop for tail
+    while (remaining >= 16 && p + 16 <= data_end) {
+        uint8x16_t v0 = vld1q_u8(p);
+        uint8x16_t c0 = vceqq_u8(vorrq_u8(v0, v_mask), v_target);
+        
+        uint64x2_t c64 = vreinterpretq_u64_u8(c0);
+        if ((vgetq_lane_u64(c64, 0) | vgetq_lane_u64(c64, 1)) == 0) {
+            p += 16;
+            remaining -= 16;
+            continue;
+        }
+        
+        uint64_t syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c0), 4)), 0);
+        while (syn) {
+            int bit = __builtin_ctzll(syn);
+            int bpos = bit >> 2;
+            int64_t pos = (p - search_start) + bpos;
+            if (pos >= 0 && pos < search_len) {
+                if (verify_fold_both(haystack + pos, needle, needle_len, data_end - haystack - pos)) return pos;
+            }
+            syn &= ~(0xFULL << (bpos * 4));
+        }
+        p += 16;
+        remaining -= 16;
+    }
+    
+    // Scalar tail (< 16 bytes)
     while (remaining > 0 && p < data_end) {
         unsigned char c = *p;
         if ((c | rare1_mask) == rare1) {
@@ -317,7 +469,131 @@ int64_t searcher_index_fold_memchr(
     const unsigned char *search_start = p;
     int64_t remaining = search_len;
     
-    // 64-byte main loop for throughput
+    // 128-byte main loop for large inputs
+    while (remaining >= 128 && p + 128 <= data_end) {
+        uint8x16_t v0 = vld1q_u8(p);
+        uint8x16_t v1 = vld1q_u8(p + 16);
+        uint8x16_t v2 = vld1q_u8(p + 32);
+        uint8x16_t v3 = vld1q_u8(p + 48);
+        uint8x16_t c0 = vceqq_u8(vorrq_u8(v0, v_mask), v_target);
+        uint8x16_t c1 = vceqq_u8(vorrq_u8(v1, v_mask), v_target);
+        uint8x16_t c2 = vceqq_u8(vorrq_u8(v2, v_mask), v_target);
+        uint8x16_t c3 = vceqq_u8(vorrq_u8(v3, v_mask), v_target);
+        uint8x16_t or0123 = vorrq_u8(vorrq_u8(c0, c1), vorrq_u8(c2, c3));
+        
+        uint8x16_t v4 = vld1q_u8(p + 64);
+        uint8x16_t v5 = vld1q_u8(p + 80);
+        uint8x16_t v6 = vld1q_u8(p + 96);
+        uint8x16_t v7 = vld1q_u8(p + 112);
+        uint8x16_t c4 = vceqq_u8(vorrq_u8(v4, v_mask), v_target);
+        uint8x16_t c5 = vceqq_u8(vorrq_u8(v5, v_mask), v_target);
+        uint8x16_t c6 = vceqq_u8(vorrq_u8(v6, v_mask), v_target);
+        uint8x16_t c7 = vceqq_u8(vorrq_u8(v7, v_mask), v_target);
+        uint8x16_t or4567 = vorrq_u8(vorrq_u8(c4, c5), vorrq_u8(c6, c7));
+        
+        uint8x16_t any_all = vorrq_u8(or0123, or4567);
+        uint64x2_t any64 = vreinterpretq_u64_u8(any_all);
+        if ((vgetq_lane_u64(any64, 0) | vgetq_lane_u64(any64, 1)) == 0) {
+            p += 128;
+            remaining -= 128;
+            continue;
+        }
+        
+        uint64x2_t first64 = vreinterpretq_u64_u8(or0123);
+        if (vgetq_lane_u64(first64, 0) | vgetq_lane_u64(first64, 1)) {
+            uint64_t syn;
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c0), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_normalized(haystack + pos, norm_needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c1), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 16 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_normalized(haystack + pos, norm_needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c2), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 32 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_normalized(haystack + pos, norm_needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c3), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 48 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_normalized(haystack + pos, norm_needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+        }
+        
+        uint64x2_t second64 = vreinterpretq_u64_u8(or4567);
+        if (vgetq_lane_u64(second64, 0) | vgetq_lane_u64(second64, 1)) {
+            uint64_t syn;
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c4), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 64 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_normalized(haystack + pos, norm_needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c5), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 80 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_normalized(haystack + pos, norm_needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c6), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 96 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_normalized(haystack + pos, norm_needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+            syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c7), 4)), 0);
+            while (syn) {
+                int bit = __builtin_ctzll(syn);
+                int bpos = bit >> 2;
+                int64_t pos = (p - search_start) + 112 + bpos;
+                if (pos >= 0 && pos < search_len) {
+                    if (verify_fold_normalized(haystack + pos, norm_needle, needle_len, data_end - haystack - pos)) return pos;
+                }
+                syn &= ~(0xFULL << (bpos * 4));
+            }
+        }
+        
+        p += 128;
+        remaining -= 128;
+    }
+    
+    // 64-byte loop for remaining
     while (remaining >= 64 && p + 64 <= data_end) {
         uint8x16_t v0 = vld1q_u8(p);
         uint8x16_t v1 = vld1q_u8(p + 16);
@@ -349,7 +625,6 @@ int64_t searcher_index_fold_memchr(
             }
             syn &= ~(0xFULL << (bpos * 4));
         }
-        
         syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c1), 4)), 0);
         while (syn) {
             int bit = __builtin_ctzll(syn);
@@ -360,7 +635,6 @@ int64_t searcher_index_fold_memchr(
             }
             syn &= ~(0xFULL << (bpos * 4));
         }
-        
         syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c2), 4)), 0);
         while (syn) {
             int bit = __builtin_ctzll(syn);
@@ -371,7 +645,6 @@ int64_t searcher_index_fold_memchr(
             }
             syn &= ~(0xFULL << (bpos * 4));
         }
-        
         syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c3), 4)), 0);
         while (syn) {
             int bit = __builtin_ctzll(syn);
@@ -436,7 +709,33 @@ int64_t searcher_index_fold_memchr(
         remaining -= 32;
     }
     
-    // Scalar tail
+    // 16-byte loop for tail
+    while (remaining >= 16 && p + 16 <= data_end) {
+        uint8x16_t v0 = vld1q_u8(p);
+        uint8x16_t c0 = vceqq_u8(vorrq_u8(v0, v_mask), v_target);
+        
+        uint64x2_t c64 = vreinterpretq_u64_u8(c0);
+        if ((vgetq_lane_u64(c64, 0) | vgetq_lane_u64(c64, 1)) == 0) {
+            p += 16;
+            remaining -= 16;
+            continue;
+        }
+        
+        uint64_t syn = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(c0), 4)), 0);
+        while (syn) {
+            int bit = __builtin_ctzll(syn);
+            int bpos = bit >> 2;
+            int64_t pos = (p - search_start) + bpos;
+            if (pos >= 0 && pos < search_len) {
+                if (verify_fold_normalized(haystack + pos, norm_needle, needle_len, data_end - haystack - pos)) return pos;
+            }
+            syn &= ~(0xFULL << (bpos * 4));
+        }
+        p += 16;
+        remaining -= 16;
+    }
+    
+    // Scalar tail (< 16 bytes)
     while (remaining > 0 && p < data_end) {
         unsigned char c = *p;
         if ((c | rare1_mask) == rare1) {
