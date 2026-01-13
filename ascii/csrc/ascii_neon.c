@@ -1673,7 +1673,7 @@ do { \
                 return _pos; \
             } \
             (failures)++; \
-            if ((failures) > 4 + (((base_offset) + (load_size)) >> 8)) { \
+            if ((failures) > mode1_base + (((base_offset) + (load_size)) >> 8)) { \
                 (search_ptr) -= (load_size); \
                 (remaining) += (load_size); \
                 goto setup_2byte_mode; \
@@ -1693,7 +1693,7 @@ do { \
                 return _pos; \
             } \
             (failures)++; \
-            if ((failures) > 4 + (((base_offset) + (load_size)) >> 8)) { \
+            if ((failures) > mode1_base + (((base_offset) + (load_size)) >> 8)) { \
                 (search_ptr) -= (load_size); \
                 (remaining) += (load_size); \
                 goto setup_2byte_mode; \
@@ -1720,7 +1720,7 @@ do { \
                 return _pos; \
             } \
             (failures)++; \
-            if ((failures) > 4 + (((base_offset) + (load_size)) >> 8)) { \
+            if ((failures) > mode1_base + (((base_offset) + (load_size)) >> 8)) { \
                 (search_ptr) -= (load_size); \
                 (remaining) += (load_size); \
                 goto setup_2byte_mode; \
@@ -1768,8 +1768,10 @@ __attribute__((always_inline)) static inline int64_t func_name( \
     unsigned char *data_end = haystack + haystack_len;                         \
     int64_t remaining = search_len;                                            \
                                                                                \
-    /* Failure counter for adaptive mode switch */                             \
+    /* Failure counter for adaptive mode switch (1-byte → 2-byte) */           \
+    /* Lower base for long needles since each verification is expensive */    \
     int64_t failures = 0;                                                      \
+    const int64_t mode1_base = (needle_len >= 64) ? 2 : 4;                                                      \
                                                                                \
     /* ===================================================================== */ \
     /* 1-BYTE MODE: Fast path using single rare byte filtering */              \
@@ -1928,7 +1930,7 @@ loop16_letter:                                                                 \
                 }                                                              \
                 failures++;                                                    \
                 int64_t bytes_scanned = search_ptr - search_start;             \
-                if (failures > 4 + (bytes_scanned >> 8)) {                     \
+                if (failures > mode1_base + (bytes_scanned >> 8)) {            \
                     search_ptr -= 16;                                          \
                     remaining += 16;                                           \
                     goto setup_2byte_mode;                                     \
@@ -1952,7 +1954,7 @@ scalar_letter:                                                                 \
                     return pos_in_search;                                      \
                 }                                                              \
                 failures++;                                                    \
-                if (failures > 4 + ((search_ptr - search_start) >> 8)) {       \
+                if (failures > mode1_base + ((search_ptr - search_start) >> 8)) { \
                     goto setup_2byte_mode;                                     \
                 }                                                              \
             }                                                                  \
@@ -2114,7 +2116,7 @@ loop16_nonletter:                                                              \
                     return pos_in_search;                                      \
                 }                                                              \
                 failures++;                                                    \
-                if (failures > 4 + ((search_ptr - search_start) >> 8)) {       \
+                if (failures > mode1_base + ((search_ptr - search_start) >> 8)) { \
                     search_ptr -= 16;                                          \
                     remaining += 16;                                           \
                     goto setup_2byte_mode;                                     \
@@ -2158,9 +2160,10 @@ setup_2byte_mode:;                                                             \
     const int64_t off2_delta = off2 - off1;                                    \
                                                                                \
     /* Track failures in 2-byte mode for Rabin-Karp fallback */                \
-    /* Lower threshold for long needles since each verification is expensive */ \
+    /* Adaptive threshold: base + pos>>5. Lower base and slower growth than  */\
+    /* Go (>>4) because our SIMD RK is fast - switch to it earlier.          */\
     int64_t failures_2byte = 0;                                                \
-    const int64_t rk_threshold = (needle_len >= 64) ? 4 : 8;                  \
+    const int64_t rk_base = (needle_len >= 64) ? 2 : 4;                        \
     int64_t rk_resume_pos = 0;                                                 \
                                                                                \
     /* 64-byte loop for 2-byte mode (using SHRN for syndrome extraction) */    \
@@ -2229,7 +2232,7 @@ setup_2byte_mode:;                                                             \
                         return pos_in_search;                                  \
                     }                                                          \
                     failures_2byte++;                                          \
-                    if (failures_2byte > rk_threshold) {                       \
+                    if (failures_2byte > rk_base + (pos_in_search >> 5)) {     \
                         rk_resume_pos = pos_in_search + 1;                     \
                         goto fallback_rabin_karp;                              \
                     }                                                          \
@@ -2270,7 +2273,7 @@ setup_2byte_mode:;                                                             \
                     return pos_in_search;                                      \
                 }                                                              \
                 failures_2byte++;                                              \
-                if (failures_2byte > rk_threshold) {                           \
+                if (failures_2byte > rk_base + (pos_in_search >> 5)) {         \
                     rk_resume_pos = pos_in_search + 1;                         \
                     goto fallback_rabin_karp;                                  \
                 }                                                              \
@@ -2294,7 +2297,7 @@ setup_2byte_mode:;                                                             \
                     return search_pos;                                         \
                 }                                                              \
                 failures_2byte++;                                              \
-                if (failures_2byte > rk_threshold) {                           \
+                if (failures_2byte > rk_base + (search_pos >> 5)) {            \
                     rk_resume_pos = search_pos + 1;                            \
                     goto fallback_rabin_karp;                                  \
                 }                                                              \
