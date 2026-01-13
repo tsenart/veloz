@@ -278,7 +278,29 @@ static uint8_t uppercasingTable[32] = {
     32,32,32,32,32,32,32,32,32,32,32,0, 0, 0, 0, 0,
 };
 
-static inline bool equal_fold_core(unsigned char *a, unsigned char *b, int64_t length,
+// Inline exact comparison (avoids bcmp/memcmp function call)
+__attribute__((always_inline)) static inline bool equal_exact_inline(
+    const unsigned char *a, const unsigned char *b, int64_t length)
+{
+    const int64_t blockSize = 16;
+    int64_t i = 0;
+
+    for (; i + blockSize <= length; i += blockSize) {
+        uint8x16_t va = vld1q_u8(a + i);
+        uint8x16_t vb = vld1q_u8(b + i);
+        uint8x16_t cmp = vceqq_u8(va, vb);
+        if (vget_lane_u64(vshrn_n_u16(cmp, 4), 0) != ~0ULL) {
+            return false;
+        }
+    }
+
+    for (; i < length; i++) {
+        if (a[i] != b[i]) return false;
+    }
+    return true;
+}
+
+__attribute__((always_inline)) static inline bool equal_fold_core(unsigned char *a, unsigned char *b, int64_t length,
     const uint8x16x2_t table, const uint8x16_t shift)
 {
     const uint64_t blockSize = 16; // NEON can process 128 bits (16 bytes) at a time
@@ -632,7 +654,7 @@ static inline uint8x8_t fold8_ascii_rk(uint8x8_t v,
 }
 
 // Compute hash of 16 folded bytes: b0*B^15 + b1*B^14 + ... + b15
-static inline uint32_t hash16_from_folded(uint8x16_t b,
+__attribute__((always_inline)) static inline uint32_t hash16_from_folded(uint8x16_t b,
                                           uint32x4_t maskFF,
                                           uint32_t B, uint32_t B2, uint32_t B3,
                                           uint32x4_t w16 /* {B^12, B^8, B^4, 1} */)
@@ -658,7 +680,7 @@ static inline uint32_t hash16_from_folded(uint8x16_t b,
 }
 
 // Compute hash of 64 bytes with folding
-static inline uint32_t hash64_fold_neon(const uint8_t *p,
+__attribute__((always_inline)) static inline uint32_t hash64_fold_neon(const uint8_t *p,
                                         uint8x16_t va, uint8x16_t vz, uint8x16_t v20,
                                         uint32x4_t maskFF,
                                         uint32_t B, uint32_t B2, uint32_t B3,
@@ -680,7 +702,7 @@ static inline uint32_t hash64_fold_neon(const uint8_t *p,
 }
 
 // Compute two hashes in one pass (needle and hay[0:w]) for better ILP
-static inline void hash2_rk_fold_neon_fast(const uint8_t *a,
+__attribute__((always_inline)) static inline void hash2_rk_fold_neon_fast(const uint8_t *a,
                                            const uint8_t *b,
                                            int64_t len,
                                            uint32_t *out_a,
@@ -740,159 +762,499 @@ static inline void hash2_rk_fold_neon_fast(const uint8_t *a,
     *out_b = hb;
 }
 
-// SIMD Rabin-Karp with stride-4 parallelism
+// =============================================================================
+// SIMD Rabin-Karp macro - generates both case-sensitive and case-insensitive
+// =============================================================================
 // Key insight: Process 4 hash positions per iteration using NEON uint32x4_t.
 // The only loop-carried dependency is H = H*B^4 + S, amortising mul latency by 4.
-// All the folding and t[k] computation is independent of H.
-//
+// CASE_FOLD: 1 = case-insensitive (fold to uppercase), 0 = case-sensitive
+
+#define RABIN_KARP_IMPL(func_name, CASE_FOLD, HASH2_FN, VERIFY_FN) \
+__attribute__((always_inline)) static inline int64_t func_name( \
+    unsigned char *haystack, int64_t haystack_len, \
+    unsigned char *needle, int64_t needle_len) \
+{ \
+    if (needle_len <= 0) return 0; \
+    if (haystack_len < needle_len) return -1; \
+    \
+    const int64_t search_len = haystack_len - needle_len + 1; \
+    const int64_t w = needle_len; \
+    \
+    /* For SIMD verification (case-fold only) */ \
+    const uint8x16x2_t table = vld1q_u8_x2(uppercasingTable); \
+    const uint8x16_t vtbl_shift = vdupq_n_u8(0x60); \
+    (void)table; (void)vtbl_shift; \
+    \
+    /* Precompute constants */ \
+    const uint32_t B = PRIME_RK; \
+    const uint32_t B2 = B * B; \
+    const uint32_t B3 = B2 * B; \
+    const uint32_t B4 = B2 * B2; \
+    const uint32_t Bw = pow_prime(w); \
+    const uint32_t antisigma = 0u - Bw; \
+    \
+    /* Fast initial hashes: compute needle and hay[0:w] together */ \
+    uint32_t target_hash, h0; \
+    HASH2_FN(needle, haystack, w, &target_hash, &h0); \
+    \
+    /* For small search_len, use scalar */ \
+    if (search_len < 4) { \
+        uint32_t h = h0; \
+        if (CASE_FOLD) { \
+            if (h == target_hash && equal_fold_core(haystack, needle, needle_len, table, vtbl_shift)) \
+                return 0; \
+        } else { \
+            if (h == target_hash && equal_exact_inline(haystack, needle, needle_len)) \
+                return 0; \
+        } \
+        for (int64_t i = 1; i < search_len; i++) { \
+            uint32_t oldc = CASE_FOLD ? fold_table[haystack[i - 1]] : haystack[i - 1]; \
+            uint32_t newc = CASE_FOLD ? fold_table[haystack[i + w - 1]] : haystack[i + w - 1]; \
+            h = h * B + newc + antisigma * oldc; \
+            if (CASE_FOLD) { \
+                if (h == target_hash && equal_fold_core(haystack + i, needle, needle_len, table, vtbl_shift)) \
+                    return i; \
+            } else { \
+                if (h == target_hash && equal_exact_inline(haystack + i, needle, needle_len)) \
+                    return i; \
+            } \
+        } \
+        return -1; \
+    } \
+    \
+    /* Build initial 4 hashes (pos 0..3) with 3 scalar rolls from h0 */ \
+    uint32_t h1, h2, h3; \
+    if (CASE_FOLD) { \
+        h1 = h0 * B + fold_table[haystack[w + 0]] + antisigma * fold_table[haystack[0]]; \
+        h2 = h1 * B + fold_table[haystack[w + 1]] + antisigma * fold_table[haystack[1]]; \
+        h3 = h2 * B + fold_table[haystack[w + 2]] + antisigma * fold_table[haystack[2]]; \
+    } else { \
+        h1 = h0 * B + haystack[w + 0] + antisigma * haystack[0]; \
+        h2 = h1 * B + haystack[w + 1] + antisigma * haystack[1]; \
+        h3 = h2 * B + haystack[w + 2] + antisigma * haystack[2]; \
+    } \
+    \
+    uint32x4_t H = (uint32x4_t){ h0, h1, h2, h3 }; \
+    \
+    /* Hoist vector constants */ \
+    const uint32x4_t vB   = vdupq_n_u32(B); \
+    const uint32x4_t vB2  = vdupq_n_u32(B2); \
+    const uint32x4_t vB3  = vdupq_n_u32(B3); \
+    const uint32x4_t vB4  = vdupq_n_u32(B4); \
+    const uint32x4_t vAnti = vdupq_n_u32(antisigma); \
+    const uint32x4_t vTgt = vdupq_n_u32(target_hash); \
+    \
+    /* Folding constants for 16-byte NEON path */ \
+    const uint8x16_t va16   = vdupq_n_u8('a'); \
+    const uint8x16_t vz16   = vdupq_n_u8('z' - 'a'); \
+    const uint8x16_t v20_16 = vdupq_n_u8(0x20); \
+    \
+    int64_t pos = 0; \
+    \
+    for (;;) { \
+        /* 1) Check 4 candidates in parallel */ \
+        uint32x4_t eq = vceqq_u32(H, vTgt); \
+        if (vmaxvq_u32(eq)) { \
+            if (CASE_FOLD) { \
+                if (vgetq_lane_u32(eq, 0) && equal_fold_core(haystack + pos + 0, needle, needle_len, table, vtbl_shift)) return pos + 0; \
+                if (vgetq_lane_u32(eq, 1) && equal_fold_core(haystack + pos + 1, needle, needle_len, table, vtbl_shift)) return pos + 1; \
+                if (vgetq_lane_u32(eq, 2) && equal_fold_core(haystack + pos + 2, needle, needle_len, table, vtbl_shift)) return pos + 2; \
+                if (vgetq_lane_u32(eq, 3) && equal_fold_core(haystack + pos + 3, needle, needle_len, table, vtbl_shift)) return pos + 3; \
+            } else { \
+                if (vgetq_lane_u32(eq, 0) && equal_exact_inline(haystack + pos + 0, needle, needle_len)) return pos + 0; \
+                if (vgetq_lane_u32(eq, 1) && equal_exact_inline(haystack + pos + 1, needle, needle_len)) return pos + 1; \
+                if (vgetq_lane_u32(eq, 2) && equal_exact_inline(haystack + pos + 2, needle, needle_len)) return pos + 2; \
+                if (vgetq_lane_u32(eq, 3) && equal_exact_inline(haystack + pos + 3, needle, needle_len)) return pos + 3; \
+            } \
+        } \
+        \
+        if (pos + 4 >= search_len) break; \
+        if (pos > search_len - 9) break; \
+        \
+        /* 2) Load 16 old/new bytes */ \
+        uint8x16_t old16b = vld1q_u8(haystack + pos); \
+        uint8x16_t new16b = vld1q_u8(haystack + pos + w); \
+        \
+        /* 3) Fold ASCII to uppercase (only if CASE_FOLD) */ \
+        if (CASE_FOLD) { \
+            { \
+                uint8x16_t x = vsubq_u8(old16b, va16); \
+                uint8x16_t m = vcleq_u8(x, vz16); \
+                old16b = vsubq_u8(old16b, vandq_u8(m, v20_16)); \
+            } \
+            { \
+                uint8x16_t x = vsubq_u8(new16b, va16); \
+                uint8x16_t m = vcleq_u8(x, vz16); \
+                new16b = vsubq_u8(new16b, vandq_u8(m, v20_16)); \
+            } \
+        } \
+        \
+        /* 4) Widen low 8 bytes -> two vectors of 4x u32 */ \
+        uint16x8_t old16 = vmovl_u8(vget_low_u8(old16b)); \
+        uint16x8_t new16 = vmovl_u8(vget_low_u8(new16b)); \
+        \
+        uint32x4_t old0 = vmovl_u16(vget_low_u16(old16)); \
+        uint32x4_t old1 = vmovl_u16(vget_high_u16(old16)); \
+        uint32x4_t new0 = vmovl_u16(vget_low_u16(new16)); \
+        uint32x4_t new1 = vmovl_u16(vget_high_u16(new16)); \
+        \
+        /* 5) t[k] = new[k] + antisigma*old[k] */ \
+        uint32x4_t t0 = vmlaq_u32(new0, old0, vAnti); \
+        uint32x4_t t1 = vmlaq_u32(new1, old1, vAnti); \
+        \
+        /* 6) Build sliding windows */ \
+        uint32x4_t T0 = t0; \
+        uint32x4_t T1 = vextq_u32(t0, t1, 1); \
+        uint32x4_t T2 = vextq_u32(t0, t1, 2); \
+        uint32x4_t T3 = vextq_u32(t0, t1, 3); \
+        \
+        /* 7) S = T0*B^3 + T1*B^2 + T2*B + T3 */ \
+        uint32x4_t S = T3; \
+        S = vmlaq_u32(S, T2, vB); \
+        S = vmlaq_u32(S, T1, vB2); \
+        S = vmlaq_u32(S, T0, vB3); \
+        \
+        /* 8) Advance: H = H*B^4 + S */ \
+        H = vmlaq_u32(S, H, vB4); \
+        \
+        pos += 4; \
+    } \
+    \
+    /* Scalar tail */ \
+    { \
+        uint32_t h = vgetq_lane_u32(H, 3); \
+        int64_t i = pos + 3; \
+        \
+        for (int64_t j = i + 1; j < search_len; j++) { \
+            uint32_t oldc = CASE_FOLD ? fold_table[haystack[j - 1]] : haystack[j - 1]; \
+            uint32_t newc = CASE_FOLD ? fold_table[haystack[j + w - 1]] : haystack[j + w - 1]; \
+            h = h * B + newc + antisigma * oldc; \
+            if (CASE_FOLD) { \
+                if (h == target_hash && equal_fold_core(haystack + j, needle, needle_len, table, vtbl_shift)) \
+                    return j; \
+            } else { \
+                if (h == target_hash && equal_exact_inline(haystack + j, needle, needle_len)) \
+                    return j; \
+            } \
+        } \
+    } \
+    \
+    return -1; \
+}
+
+// Case-sensitive hash: no folding
+__attribute__((always_inline)) static inline void hash2_rk_exact_neon_fast(const uint8_t *a,
+                                            const uint8_t *b,
+                                            int64_t len,
+                                            uint32_t *out_a,
+                                            uint32_t *out_b)
+{
+    const uint32_t B   = PRIME_RK;
+    const uint32_t B2  = B * B;
+    const uint32_t B3  = B2 * B;
+    const uint32_t B4  = B2 * B2;
+    const uint32_t B8  = B4 * B4;
+    const uint32_t B12 = B8 * B4;
+    const uint32_t B16 = B8 * B8;
+    const uint32_t B32 = B16 * B16;
+    const uint32_t B48 = B32 * B16;
+    const uint32_t B64 = B32 * B32;
+
+    const uint32x4_t maskFF = vdupq_n_u32(0xFFu);
+    const uint32x4_t w16 = (uint32x4_t){ B12, B8, B4, 1u };
+    const uint32x4_t w64 = (uint32x4_t){ B48, B32, B16, 1u };
+
+    uint32_t ha = 0u, hb = 0u;
+    int64_t i = 0;
+
+    // 64-byte blocks (no folding - just load directly)
+    for (; i + 64 <= len; i += 64) {
+        uint8x16_t b0a = vld1q_u8(a + i +  0);
+        uint8x16_t b1a = vld1q_u8(a + i + 16);
+        uint8x16_t b2a = vld1q_u8(a + i + 32);
+        uint8x16_t b3a = vld1q_u8(a + i + 48);
+
+        uint8x16_t b0b = vld1q_u8(b + i +  0);
+        uint8x16_t b1b = vld1q_u8(b + i + 16);
+        uint8x16_t b2b = vld1q_u8(b + i + 32);
+        uint8x16_t b3b = vld1q_u8(b + i + 48);
+
+        uint32_t h0a = hash16_from_folded(b0a, maskFF, B, B2, B3, w16);
+        uint32_t h1a = hash16_from_folded(b1a, maskFF, B, B2, B3, w16);
+        uint32_t h2a = hash16_from_folded(b2a, maskFF, B, B2, B3, w16);
+        uint32_t h3a = hash16_from_folded(b3a, maskFF, B, B2, B3, w16);
+
+        uint32_t h0b = hash16_from_folded(b0b, maskFF, B, B2, B3, w16);
+        uint32_t h1b = hash16_from_folded(b1b, maskFF, B, B2, B3, w16);
+        uint32_t h2b = hash16_from_folded(b2b, maskFF, B, B2, B3, w16);
+        uint32_t h3b = hash16_from_folded(b3b, maskFF, B, B2, B3, w16);
+
+        uint32x4_t hva = (uint32x4_t){h0a, h1a, h2a, h3a};
+        uint32x4_t hvb = (uint32x4_t){h0b, h1b, h2b, h3b};
+
+        ha = ha * B64 + vaddvq_u32(vmulq_u32(hva, w64));
+        hb = hb * B64 + vaddvq_u32(vmulq_u32(hvb, w64));
+    }
+
+    // 16-byte blocks
+    for (; i + 16 <= len; i += 16) {
+        uint8x16_t fa = vld1q_u8(a + i);
+        uint8x16_t fb = vld1q_u8(b + i);
+
+        uint32_t ba = hash16_from_folded(fa, maskFF, B, B2, B3, w16);
+        uint32_t bb = hash16_from_folded(fb, maskFF, B, B2, B3, w16);
+
+        ha = ha * B16 + ba;
+        hb = hb * B16 + bb;
+    }
+
+    // tail bytes
+    for (; i < len; i++) {
+        ha = ha * B + a[i];
+        hb = hb * B + b[i];
+    }
+
+    *out_a = ha;
+    *out_b = hb;
+}
+
+// Forward declaration for equal_fold_normalized (defined later, used by RK prefolded)
+static inline bool equal_fold_normalized(const unsigned char *a, const unsigned char *b, int64_t len, int64_t haystack_remaining);
+
+// Hash function for pre-folded needle: needle is exact (already folded), haystack needs folding
+__attribute__((always_inline)) static inline void hash2_rk_prefolded_neon_fast(const uint8_t *needle_prefolded,
+                                                const uint8_t *haystack,
+                                                int64_t len,
+                                                uint32_t *out_needle,
+                                                uint32_t *out_hay)
+{
+    const uint32_t B   = PRIME_RK;
+    const uint32_t B2  = B * B;
+    const uint32_t B3  = B2 * B;
+    const uint32_t B4  = B2 * B2;
+    const uint32_t B8  = B4 * B4;
+    const uint32_t B12 = B8 * B4;
+    const uint32_t B16 = B8 * B8;
+    const uint32_t B32 = B16 * B16;
+    const uint32_t B48 = B32 * B16;
+    const uint32_t B64 = B32 * B32;
+
+    const uint32x4_t maskFF = vdupq_n_u32(0xFFu);
+    const uint32x4_t w16 = (uint32x4_t){ B12, B8, B4, 1u };
+    const uint32x4_t w64 = (uint32x4_t){ B48, B32, B16, 1u };
+
+    const uint8x16_t va16  = vdupq_n_u8('a');
+    const uint8x16_t vz16  = vdupq_n_u8('z' - 'a');
+    const uint8x16_t v20_16= vdupq_n_u8(0x20u);
+
+    uint32_t hn = 0u, hh = 0u;
+    int64_t i = 0;
+
+    // 64-byte blocks
+    for (; i + 64 <= len; i += 64) {
+        // Needle: already folded, just load
+        uint8x16_t n0 = vld1q_u8(needle_prefolded + i +  0);
+        uint8x16_t n1 = vld1q_u8(needle_prefolded + i + 16);
+        uint8x16_t n2 = vld1q_u8(needle_prefolded + i + 32);
+        uint8x16_t n3 = vld1q_u8(needle_prefolded + i + 48);
+
+        // Haystack: needs folding
+        uint8x16_t h0 = fold16_ascii_rk(vld1q_u8(haystack + i +  0), va16, vz16, v20_16);
+        uint8x16_t h1 = fold16_ascii_rk(vld1q_u8(haystack + i + 16), va16, vz16, v20_16);
+        uint8x16_t h2 = fold16_ascii_rk(vld1q_u8(haystack + i + 32), va16, vz16, v20_16);
+        uint8x16_t h3 = fold16_ascii_rk(vld1q_u8(haystack + i + 48), va16, vz16, v20_16);
+
+        uint32_t hn0 = hash16_from_folded(n0, maskFF, B, B2, B3, w16);
+        uint32_t hn1 = hash16_from_folded(n1, maskFF, B, B2, B3, w16);
+        uint32_t hn2 = hash16_from_folded(n2, maskFF, B, B2, B3, w16);
+        uint32_t hn3 = hash16_from_folded(n3, maskFF, B, B2, B3, w16);
+
+        uint32_t hh0 = hash16_from_folded(h0, maskFF, B, B2, B3, w16);
+        uint32_t hh1 = hash16_from_folded(h1, maskFF, B, B2, B3, w16);
+        uint32_t hh2 = hash16_from_folded(h2, maskFF, B, B2, B3, w16);
+        uint32_t hh3 = hash16_from_folded(h3, maskFF, B, B2, B3, w16);
+
+        uint32x4_t hvn = (uint32x4_t){hn0, hn1, hn2, hn3};
+        uint32x4_t hvh = (uint32x4_t){hh0, hh1, hh2, hh3};
+
+        hn = hn * B64 + vaddvq_u32(vmulq_u32(hvn, w64));
+        hh = hh * B64 + vaddvq_u32(vmulq_u32(hvh, w64));
+    }
+
+    // 16-byte blocks
+    for (; i + 16 <= len; i += 16) {
+        uint8x16_t fn = vld1q_u8(needle_prefolded + i);
+        uint8x16_t fh = fold16_ascii_rk(vld1q_u8(haystack + i), va16, vz16, v20_16);
+
+        uint32_t bn = hash16_from_folded(fn, maskFF, B, B2, B3, w16);
+        uint32_t bh = hash16_from_folded(fh, maskFF, B, B2, B3, w16);
+
+        hn = hn * B16 + bn;
+        hh = hh * B16 + bh;
+    }
+
+    // tail bytes
+    for (; i < len; i++) {
+        hn = hn * B + needle_prefolded[i];
+        hh = hh * B + fold_table[haystack[i]];
+    }
+
+    *out_needle = hn;
+    *out_hay = hh;
+}
+
+// Generate all three implementations
+RABIN_KARP_IMPL(index_fold_rabin_karp_impl, 1, hash2_rk_fold_neon_fast, equal_fold_core)
+RABIN_KARP_IMPL(index_exact_rabin_karp_impl, 0, hash2_rk_exact_neon_fast, __builtin_memcmp)
+
+// Pre-folded needle variant: needle already normalized, only fold haystack
+// Uses CASE_FOLD=1 for haystack rolling/verification but needle hash is exact
+#define RABIN_KARP_PREFOLDED_IMPL(func_name) \
+__attribute__((always_inline)) static inline int64_t func_name( \
+    unsigned char *haystack, int64_t haystack_len, \
+    unsigned char *needle, int64_t needle_len) \
+{ \
+    if (needle_len <= 0) return 0; \
+    if (haystack_len < needle_len) return -1; \
+    \
+    const int64_t search_len = haystack_len - needle_len + 1; \
+    const int64_t w = needle_len; \
+    \
+    const uint8x16x2_t table = vld1q_u8_x2(uppercasingTable); \
+    const uint8x16_t vtbl_shift = vdupq_n_u8(0x60); \
+    \
+    const uint32_t B = PRIME_RK; \
+    const uint32_t B2 = B * B; \
+    const uint32_t B3 = B2 * B; \
+    const uint32_t B4 = B2 * B2; \
+    const uint32_t Bw = pow_prime(w); \
+    const uint32_t antisigma = 0u - Bw; \
+    \
+    uint32_t target_hash, h0; \
+    hash2_rk_prefolded_neon_fast(needle, haystack, w, &target_hash, &h0); \
+    \
+    if (search_len < 4) { \
+        uint32_t h = h0; \
+        if (h == target_hash && equal_fold_normalized(haystack, needle, needle_len, haystack_len)) \
+            return 0; \
+        for (int64_t i = 1; i < search_len; i++) { \
+            uint32_t oldc = fold_table[haystack[i - 1]]; \
+            uint32_t newc = fold_table[haystack[i + w - 1]]; \
+            h = h * B + newc + antisigma * oldc; \
+            if (h == target_hash && equal_fold_normalized(haystack + i, needle, needle_len, haystack_len - i)) \
+                return i; \
+        } \
+        return -1; \
+    } \
+    \
+    uint32_t h1 = h0 * B + fold_table[haystack[w + 0]] + antisigma * fold_table[haystack[0]]; \
+    uint32_t h2 = h1 * B + fold_table[haystack[w + 1]] + antisigma * fold_table[haystack[1]]; \
+    uint32_t h3 = h2 * B + fold_table[haystack[w + 2]] + antisigma * fold_table[haystack[2]]; \
+    \
+    uint32x4_t H = (uint32x4_t){ h0, h1, h2, h3 }; \
+    \
+    const uint32x4_t vB   = vdupq_n_u32(B); \
+    const uint32x4_t vB2  = vdupq_n_u32(B2); \
+    const uint32x4_t vB3  = vdupq_n_u32(B3); \
+    const uint32x4_t vB4  = vdupq_n_u32(B4); \
+    const uint32x4_t vAnti = vdupq_n_u32(antisigma); \
+    const uint32x4_t vTgt = vdupq_n_u32(target_hash); \
+    \
+    const uint8x16_t va16   = vdupq_n_u8('a'); \
+    const uint8x16_t vz16   = vdupq_n_u8('z' - 'a'); \
+    const uint8x16_t v20_16 = vdupq_n_u8(0x20); \
+    \
+    int64_t pos = 0; \
+    \
+    for (;;) { \
+        uint32x4_t eq = vceqq_u32(H, vTgt); \
+        if (vmaxvq_u32(eq)) { \
+            if (vgetq_lane_u32(eq, 0) && equal_fold_normalized(haystack + pos + 0, needle, needle_len, haystack_len - pos - 0)) return pos + 0; \
+            if (vgetq_lane_u32(eq, 1) && equal_fold_normalized(haystack + pos + 1, needle, needle_len, haystack_len - pos - 1)) return pos + 1; \
+            if (vgetq_lane_u32(eq, 2) && equal_fold_normalized(haystack + pos + 2, needle, needle_len, haystack_len - pos - 2)) return pos + 2; \
+            if (vgetq_lane_u32(eq, 3) && equal_fold_normalized(haystack + pos + 3, needle, needle_len, haystack_len - pos - 3)) return pos + 3; \
+        } \
+        \
+        if (pos + 4 >= search_len) break; \
+        if (pos > search_len - 9) break; \
+        \
+        uint8x16_t old16b = vld1q_u8(haystack + pos); \
+        uint8x16_t new16b = vld1q_u8(haystack + pos + w); \
+        \
+        { \
+            uint8x16_t x = vsubq_u8(old16b, va16); \
+            uint8x16_t m = vcleq_u8(x, vz16); \
+            old16b = vsubq_u8(old16b, vandq_u8(m, v20_16)); \
+        } \
+        { \
+            uint8x16_t x = vsubq_u8(new16b, va16); \
+            uint8x16_t m = vcleq_u8(x, vz16); \
+            new16b = vsubq_u8(new16b, vandq_u8(m, v20_16)); \
+        } \
+        \
+        uint16x8_t old16 = vmovl_u8(vget_low_u8(old16b)); \
+        uint16x8_t new16 = vmovl_u8(vget_low_u8(new16b)); \
+        \
+        uint32x4_t old0 = vmovl_u16(vget_low_u16(old16)); \
+        uint32x4_t old1 = vmovl_u16(vget_high_u16(old16)); \
+        uint32x4_t new0 = vmovl_u16(vget_low_u16(new16)); \
+        uint32x4_t new1 = vmovl_u16(vget_high_u16(new16)); \
+        \
+        uint32x4_t t0 = vmlaq_u32(new0, old0, vAnti); \
+        uint32x4_t t1 = vmlaq_u32(new1, old1, vAnti); \
+        \
+        uint32x4_t T0 = t0; \
+        uint32x4_t T1 = vextq_u32(t0, t1, 1); \
+        uint32x4_t T2 = vextq_u32(t0, t1, 2); \
+        uint32x4_t T3 = vextq_u32(t0, t1, 3); \
+        \
+        uint32x4_t S = T3; \
+        S = vmlaq_u32(S, T2, vB); \
+        S = vmlaq_u32(S, T1, vB2); \
+        S = vmlaq_u32(S, T0, vB3); \
+        \
+        H = vmlaq_u32(S, H, vB4); \
+        \
+        pos += 4; \
+    } \
+    \
+    { \
+        uint32_t h = vgetq_lane_u32(H, 3); \
+        int64_t i = pos + 3; \
+        \
+        for (int64_t j = i + 1; j < search_len; j++) { \
+            uint32_t oldc = fold_table[haystack[j - 1]]; \
+            uint32_t newc = fold_table[haystack[j + w - 1]]; \
+            h = h * B + newc + antisigma * oldc; \
+            if (h == target_hash && equal_fold_normalized(haystack + j, needle, needle_len, haystack_len - j)) \
+                return j; \
+        } \
+    } \
+    \
+    return -1; \
+}
+
+RABIN_KARP_PREFOLDED_IMPL(index_prefolded_rabin_karp_impl)
+
 // gocc: indexFoldRabinKarp(haystack string, needle string) int
 int64_t index_fold_rabin_karp_simd(unsigned char *haystack, int64_t haystack_len,
                                     unsigned char *needle, int64_t needle_len)
 {
-    if (needle_len <= 0) return 0;
-    if (haystack_len < needle_len) return -1;
-    
-    const int64_t search_len = haystack_len - needle_len + 1;
-    const int64_t w = needle_len;
-    
-    // For SIMD verification
-    const uint8x16x2_t table = vld1q_u8_x2(uppercasingTable);
-    const uint8x16_t vtbl_shift = vdupq_n_u8(0x60);
-    
-    // Precompute constants
-    const uint32_t B = PRIME_RK;
-    const uint32_t B2 = B * B;
-    const uint32_t B3 = B2 * B;
-    const uint32_t B4 = B2 * B2;
-    const uint32_t Bw = pow_prime(w);
-    const uint32_t antisigma = 0u - Bw;  // -B^w mod 2^32
-    
-    // Fast initial hashes: compute needle and hay[0:w] together using NEON block hashing
-    // This reduces dependency depth from ~w to ~w/64 for long needles
-    uint32_t target_hash, h0;
-    hash2_rk_fold_neon_fast(needle, haystack, w, &target_hash, &h0);
-    
-    // For small search_len, use scalar
-    if (search_len < 4) {
-        uint32_t h = h0;
-        if (h == target_hash && equal_fold_core(haystack, needle, needle_len, table, vtbl_shift)) {
-            return 0;
-        }
-        for (int64_t i = 1; i < search_len; i++) {
-            uint32_t oldc = fold_table[haystack[i - 1]];
-            uint32_t newc = fold_table[haystack[i + w - 1]];
-            h = h * B + newc + antisigma * oldc;
-            if (h == target_hash && equal_fold_core(haystack + i, needle, needle_len, table, vtbl_shift)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-    
-    // Build initial 4 hashes (pos 0..3) with 3 scalar rolls from h0
-    uint32_t h1 = h0 * B + fold_table[haystack[w + 0]] + antisigma * fold_table[haystack[0]];
-    uint32_t h2 = h1 * B + fold_table[haystack[w + 1]] + antisigma * fold_table[haystack[1]];
-    uint32_t h3 = h2 * B + fold_table[haystack[w + 2]] + antisigma * fold_table[haystack[2]];
-    
-    uint32x4_t H = (uint32x4_t){ h0, h1, h2, h3 };
-    
-    // Hoist vector constants
-    const uint32x4_t vB   = vdupq_n_u32(B);
-    const uint32x4_t vB2  = vdupq_n_u32(B2);
-    const uint32x4_t vB3  = vdupq_n_u32(B3);
-    const uint32x4_t vB4  = vdupq_n_u32(B4);
-    const uint32x4_t vAnti = vdupq_n_u32(antisigma);
-    const uint32x4_t vTgt = vdupq_n_u32(target_hash);
-    
-    // Folding constants for 16-byte NEON path
-    const uint8x16_t va16   = vdupq_n_u8('a');
-    const uint8x16_t vz16   = vdupq_n_u8('z' - 'a');
-    const uint8x16_t v20_16 = vdupq_n_u8(0x20);
-    
-    int64_t pos = 0;
-    
-    for (;;) {
-        // 1) Check 4 candidates in parallel
-        uint32x4_t eq = vceqq_u32(H, vTgt);
-        if (vmaxvq_u32(eq)) {
-            // Check lanes in order to preserve earliest match semantics
-            if (vgetq_lane_u32(eq, 0) && equal_fold_core(haystack + pos + 0, needle, needle_len, table, vtbl_shift)) return pos + 0;
-            if (vgetq_lane_u32(eq, 1) && equal_fold_core(haystack + pos + 1, needle, needle_len, table, vtbl_shift)) return pos + 1;
-            if (vgetq_lane_u32(eq, 2) && equal_fold_core(haystack + pos + 2, needle, needle_len, table, vtbl_shift)) return pos + 2;
-            if (vgetq_lane_u32(eq, 3) && equal_fold_core(haystack + pos + 3, needle, needle_len, table, vtbl_shift)) return pos + 3;
-        }
-        
-        // No more starts after this block
-        if (pos + 4 >= search_len) break;
-        
-        // Fast vector update needs 8 bytes at hay[pos+w..pos+w+7]
-        // If too close to end, finish with scalar tail
-        if (pos > search_len - 9) break;
-        
-        // 2) Load 16 old bytes and 16 new bytes (we only use 8, but 16-byte loads are same cost)
-        uint8x16_t old16b = vld1q_u8(haystack + pos);
-        uint8x16_t new16b = vld1q_u8(haystack + pos + w);
-        
-        // 3) Fold ASCII to uppercase with NEON (no table lookup)
-        {
-            uint8x16_t x = vsubq_u8(old16b, va16);
-            uint8x16_t m = vcleq_u8(x, vz16);
-            old16b = vsubq_u8(old16b, vandq_u8(m, v20_16));
-        }
-        {
-            uint8x16_t x = vsubq_u8(new16b, va16);
-            uint8x16_t m = vcleq_u8(x, vz16);
-            new16b = vsubq_u8(new16b, vandq_u8(m, v20_16));
-        }
-        
-        // 4) Widen low 8 bytes -> two vectors of 4x u32
-        uint16x8_t old16 = vmovl_u8(vget_low_u8(old16b));
-        uint16x8_t new16 = vmovl_u8(vget_low_u8(new16b));
-        
-        uint32x4_t old0 = vmovl_u16(vget_low_u16(old16));   // old[pos+0..3]
-        uint32x4_t old1 = vmovl_u16(vget_high_u16(old16));  // old[pos+4..7]
-        uint32x4_t new0 = vmovl_u16(vget_low_u16(new16));   // new[pos+0..3]
-        uint32x4_t new1 = vmovl_u16(vget_high_u16(new16));  // new[pos+4..7]
-        
-        // 5) t[k] = new[k] + antisigma*old[k]
-        uint32x4_t t0 = vmlaq_u32(new0, old0, vAnti);  // t[pos+0..3]
-        uint32x4_t t1 = vmlaq_u32(new1, old1, vAnti);  // t[pos+4..7]
-        
-        // 6) Build sliding windows using EXT:
-        //    T0 = [t0,t1,t2,t3], T1 = [t1,t2,t3,t4], T2 = [t2,t3,t4,t5], T3 = [t3,t4,t5,t6]
-        uint32x4_t T0 = t0;
-        uint32x4_t T1 = vextq_u32(t0, t1, 1);
-        uint32x4_t T2 = vextq_u32(t0, t1, 2);
-        uint32x4_t T3 = vextq_u32(t0, t1, 3);
-        
-        // 7) S = T0*B^3 + T1*B^2 + T2*B + T3
-        uint32x4_t S = T3;
-        S = vmlaq_u32(S, T2, vB);
-        S = vmlaq_u32(S, T1, vB2);
-        S = vmlaq_u32(S, T0, vB3);
-        
-        // 8) Advance all 4 hashes: H = H*B^4 + S
-        H = vmlaq_u32(S, H, vB4);
-        
-        pos += 4;
-    }
-    
-    // Scalar tail from the last hash we have (lane 3 = hash at pos+3)
-    {
-        uint32_t h = vgetq_lane_u32(H, 3);
-        int64_t i = pos + 3;
-        
-        for (int64_t j = i + 1; j < search_len; j++) {
-            uint32_t oldc = fold_table[haystack[j - 1]];
-            uint32_t newc = fold_table[haystack[j + w - 1]];
-            h = h * B + newc + antisigma * oldc;
-            if (h == target_hash && equal_fold_core(haystack + j, needle, needle_len, table, vtbl_shift)) {
-                return j;
-            }
-        }
-    }
-    
-    return -1;
+    return index_fold_rabin_karp_impl(haystack, haystack_len, needle, needle_len);
+}
+
+// gocc: indexExactRabinKarp(haystack string, needle string) int
+int64_t index_exact_rabin_karp_simd(unsigned char *haystack, int64_t haystack_len,
+                                     unsigned char *needle, int64_t needle_len)
+{
+    return index_exact_rabin_karp_impl(haystack, haystack_len, needle, needle_len);
+}
+
+// gocc: indexPrefoldedRabinKarp(haystack string, needle string) int
+int64_t index_prefolded_rabin_karp_simd(unsigned char *haystack, int64_t haystack_len,
+                                         unsigned char *needle, int64_t needle_len)
+{
+    return index_prefolded_rabin_karp_impl(haystack, haystack_len, needle, needle_len);
 }
 
 static inline int64_t index_fold_1_byte_needle(unsigned char *haystack, uint64_t haystack_len,
@@ -1366,7 +1728,7 @@ do { \
     } \
 } while(0)
 
-#define INDEX_IMPL(func_name, FILTER_FOLD, VERIFY_FN) \
+#define INDEX_IMPL(func_name, FILTER_FOLD, VERIFY_FN, RK_IMPL) \
 __attribute__((always_inline)) static inline int64_t func_name( \
     unsigned char *haystack, int64_t haystack_len, \
     uint8_t rare1, int64_t off1, \
@@ -1421,37 +1783,95 @@ __attribute__((always_inline)) static inline int64_t func_name( \
                                                                                \
 loop128_letter:                                                                \
     while (remaining >= 128 && search_ptr + 128 <= data_end) {                 \
-        /* Compute base offset once - reduces live variables */                \
-        int64_t base_offset = search_ptr - search_start;                       \
+        /* Exactly matches handwritten ASM loop128_1byte structure */          \
         uint8x16x4_t batch0 = vld1q_u8_x4(search_ptr);                         \
         uint8x16x4_t batch1 = vld1q_u8_x4(search_ptr + 64);                    \
         search_ptr += 128;                                                     \
         remaining -= 128;                                                      \
                                                                                \
-        /* OR with 0x20 and compare - first 64 bytes */                        \
+        /* VORR + VCMEQ - case-fold and compare */                             \
         uint8x16_t m0 = vceqq_u8(vorrq_u8(batch0.val[0], v_mask1), v_target1); \
         uint8x16_t m1 = vceqq_u8(vorrq_u8(batch0.val[1], v_mask1), v_target1); \
         uint8x16_t m2 = vceqq_u8(vorrq_u8(batch0.val[2], v_mask1), v_target1); \
         uint8x16_t m3 = vceqq_u8(vorrq_u8(batch0.val[3], v_mask1), v_target1); \
-        /* Second 64 bytes */                                                  \
         uint8x16_t m4 = vceqq_u8(vorrq_u8(batch1.val[0], v_mask1), v_target1); \
         uint8x16_t m5 = vceqq_u8(vorrq_u8(batch1.val[1], v_mask1), v_target1); \
         uint8x16_t m6 = vceqq_u8(vorrq_u8(batch1.val[2], v_mask1), v_target1); \
         uint8x16_t m7 = vceqq_u8(vorrq_u8(batch1.val[3], v_mask1), v_target1); \
                                                                                \
-        /* OR-reduce all 8 vectors for quick "any match?" check */             \
-        uint8x16_t any0123 = vorrq_u8(vorrq_u8(m0, m1), vorrq_u8(m2, m3));     \
-        uint8x16_t any4567 = vorrq_u8(vorrq_u8(m4, m5), vorrq_u8(m6, m7));     \
-        uint8x16_t any_all = vorrq_u8(any0123, any4567);                       \
-        if (any_nonzero(any_all) == 0) continue;                                 \
+        /* OR-reduce all 8 for quick check (exactly like ASM) */               \
+        uint8x16_t or01 = vorrq_u8(m0, m1);                                    \
+        uint8x16_t or23 = vorrq_u8(m2, m3);                                    \
+        uint8x16_t or45 = vorrq_u8(m4, m5);                                    \
+        uint8x16_t or67 = vorrq_u8(m6, m7);                                    \
+        uint8x16_t or0123 = vorrq_u8(or01, or23);                              \
+        uint8x16_t or4567 = vorrq_u8(or45, or67);                              \
+        uint8x16_t or_all = vorrq_u8(or0123, or4567);                          \
+        if (any_nonzero(or_all) == 0) continue;                                \
                                                                                \
-        /* Build 128-bit syndrome: 1 bit per byte position */                  \
-        /* This prevents LLVM from pre-computing haystack+offset pointers */   \
-        uint64_t syn_lo = extract_bitmask64(m0, m1, m2, m3);                   \
-        uint64_t syn_hi = extract_bitmask64(m4, m5, m6, m7);                   \
-        PROCESS_COMBINED_SYNDROME_128(syn_lo, syn_hi, base_offset, 128,        \
-            search_len, haystack, data_end, needle, needle_len, failures,      \
-            search_ptr, remaining, search_start, VERIFY_FN);                   \
+        /* Check first 64 bytes */                                             \
+        if (any_nonzero(or0123)) {                                             \
+            /* Lazy per-chunk syndrome extraction like ASM */                  \
+            uint32_t syn0 = extract_syndrome(m0, v_magic);                     \
+            if (syn0) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn0, 0, base, 128, search_len,        \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn1 = extract_syndrome(m1, v_magic);                     \
+            if (syn1) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn1, 16, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn2 = extract_syndrome(m2, v_magic);                     \
+            if (syn2) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn2, 32, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn3 = extract_syndrome(m3, v_magic);                     \
+            if (syn3) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn3, 48, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+        }                                                                      \
+        /* Check second 64 bytes */                                            \
+        if (any_nonzero(or4567)) {                                             \
+            uint32_t syn4 = extract_syndrome(m4, v_magic);                     \
+            if (syn4) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn4, 64, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn5 = extract_syndrome(m5, v_magic);                     \
+            if (syn5) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn5, 80, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn6 = extract_syndrome(m6, v_magic);                     \
+            if (syn6) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn6, 96, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn7 = extract_syndrome(m7, v_magic);                     \
+            if (syn7) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn7, 112, base, 128, search_len,      \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+        }                                                                      \
     }                                                                          \
     if (remaining >= 32) goto loop32_letter;                                   \
     goto loop16_letter;                                                        \
@@ -1550,14 +1970,13 @@ nonletter_dispatch:                                                            \
                                                                                \
 loop128_nonletter:                                                             \
     while (remaining >= 128 && search_ptr + 128 <= data_end) {                 \
-        /* Compute base offset once - reduces live variables */                \
-        int64_t base_offset = search_ptr - search_start;                       \
+        /* Exactly matches handwritten ASM loop128_nl structure */             \
         uint8x16x4_t batch0 = vld1q_u8_x4(search_ptr);                         \
         uint8x16x4_t batch1 = vld1q_u8_x4(search_ptr + 64);                    \
         search_ptr += 128;                                                     \
         remaining -= 128;                                                      \
                                                                                \
-        /* Direct compare - no VORR needed for non-letters */                  \
+        /* 8x VCMEQ - direct compare */                                        \
         uint8x16_t m0 = vceqq_u8(batch0.val[0], v_target1);                    \
         uint8x16_t m1 = vceqq_u8(batch0.val[1], v_target1);                    \
         uint8x16_t m2 = vceqq_u8(batch0.val[2], v_target1);                    \
@@ -1567,18 +1986,79 @@ loop128_nonletter:                                                             \
         uint8x16_t m6 = vceqq_u8(batch1.val[2], v_target1);                    \
         uint8x16_t m7 = vceqq_u8(batch1.val[3], v_target1);                    \
                                                                                \
-        /* OR-reduce all 8 vectors for quick "any match?" check */             \
-        uint8x16_t any0123 = vorrq_u8(vorrq_u8(m0, m1), vorrq_u8(m2, m3));     \
-        uint8x16_t any4567 = vorrq_u8(vorrq_u8(m4, m5), vorrq_u8(m6, m7));     \
-        uint8x16_t any_all = vorrq_u8(any0123, any4567);                       \
-        if (any_nonzero(any_all) == 0) continue;                                 \
+        /* OR-reduce all 8 for quick check (exactly like ASM) */               \
+        uint8x16_t or01 = vorrq_u8(m0, m1);                                    \
+        uint8x16_t or23 = vorrq_u8(m2, m3);                                    \
+        uint8x16_t or45 = vorrq_u8(m4, m5);                                    \
+        uint8x16_t or67 = vorrq_u8(m6, m7);                                    \
+        uint8x16_t or0123 = vorrq_u8(or01, or23);                              \
+        uint8x16_t or4567 = vorrq_u8(or45, or67);                              \
+        uint8x16_t or_all = vorrq_u8(or0123, or4567);                          \
+        if (any_nonzero(or_all) == 0) continue;                                \
                                                                                \
-        /* Build 128-bit syndrome: 1 bit per byte position */                  \
-        uint64_t syn_lo = extract_bitmask64(m0, m1, m2, m3);                   \
-        uint64_t syn_hi = extract_bitmask64(m4, m5, m6, m7);                   \
-        PROCESS_COMBINED_SYNDROME_128(syn_lo, syn_hi, base_offset, 128,        \
-            search_len, haystack, data_end, needle, needle_len, failures,      \
-            search_ptr, remaining, search_start, VERIFY_FN);                   \
+        /* Check first 64 bytes */                                             \
+        if (any_nonzero(or0123)) {                                             \
+            /* Lazy per-chunk syndrome extraction like ASM */                  \
+            uint32_t syn0 = extract_syndrome(m0, v_magic);                     \
+            if (syn0) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn0, 0, base, 128, search_len,        \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn1 = extract_syndrome(m1, v_magic);                     \
+            if (syn1) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn1, 16, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn2 = extract_syndrome(m2, v_magic);                     \
+            if (syn2) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn2, 32, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn3 = extract_syndrome(m3, v_magic);                     \
+            if (syn3) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn3, 48, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+        }                                                                      \
+        /* Check second 64 bytes */                                            \
+        if (any_nonzero(or4567)) {                                             \
+            uint32_t syn4 = extract_syndrome(m4, v_magic);                     \
+            if (syn4) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn4, 64, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn5 = extract_syndrome(m5, v_magic);                     \
+            if (syn5) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn5, 80, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn6 = extract_syndrome(m6, v_magic);                     \
+            if (syn6) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn6, 96, base, 128, search_len,       \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+            uint32_t syn7 = extract_syndrome(m7, v_magic);                     \
+            if (syn7) {                                                        \
+                int64_t base = search_ptr - 128 - search_start;                \
+                PROCESS_SYNDROME_SIMPLE(syn7, 112, base, 128, search_len,      \
+                    haystack, data_end, needle, needle_len, failures,          \
+                    search_ptr, remaining, search_start, VERIFY_FN);           \
+            }                                                                  \
+        }                                                                      \
     }                                                                          \
     if (remaining >= 32) goto loop32_nonletter;                                \
     goto loop16_nonletter;                                                     \
@@ -1674,6 +2154,10 @@ setup_2byte_mode:;                                                             \
     /* Compute rare2 offset relative to search_ptr: off2 - off1 */              \
     const int64_t off2_delta = off2 - off1;                                    \
                                                                                \
+    /* Track failures in 2-byte mode for Rabin-Karp fallback */                \
+    int64_t failures_2byte = 0;                                                \
+    const int64_t rk_threshold = 8 + (needle_len >> 6);  /* higher for long needles */ \
+                                                                               \
     /* 64-byte loop for 2-byte mode (using SHRN for syndrome extraction) */    \
     /* Need to ensure both rare1 and rare2 reads stay in bounds */             \
     while (remaining >= 64 && search_ptr + 64 <= data_end &&                   \
@@ -1739,6 +2223,10 @@ setup_2byte_mode:;                                                             \
                     if (VERIFY_FN(candidate, needle, needle_len, cand_remaining)) { \
                         return pos_in_search;                                  \
                     }                                                          \
+                    failures_2byte++;                                          \
+                    if (FILTER_FOLD && failures_2byte > rk_threshold) {        \
+                        goto fallback_rabin_karp;                              \
+                    }                                                          \
                 }                                                              \
                 /* Clear nibble */                                             \
                 int clear_pos = ((byte_pos + 1) << 2);                         \
@@ -1775,6 +2263,10 @@ setup_2byte_mode:;                                                             \
                 if (VERIFY_FN(candidate, needle, needle_len, cand_remaining)) { \
                     return pos_in_search;                                      \
                 }                                                              \
+                failures_2byte++;                                              \
+                if (FILTER_FOLD && failures_2byte > rk_threshold) {            \
+                    goto fallback_rabin_karp;                                  \
+                }                                                              \
             }                                                                  \
             int clear_pos = ((byte_pos + 1) << 2);                             \
             syndrome &= ~((1ULL << clear_pos) - 1);                            \
@@ -1794,6 +2286,10 @@ setup_2byte_mode:;                                                             \
                 if (VERIFY_FN(candidate, needle, needle_len, cand_remaining)) { \
                     return search_pos;                                         \
                 }                                                              \
+                failures_2byte++;                                              \
+                if (FILTER_FOLD && failures_2byte > rk_threshold) {            \
+                    goto fallback_rabin_karp;                                  \
+                }                                                              \
             }                                                                  \
         }                                                                      \
         search_ptr++;                                                          \
@@ -1801,6 +2297,16 @@ setup_2byte_mode:;                                                             \
     }                                                                          \
                                                                                \
     return -1;                                                                 \
+                                                                               \
+fallback_rabin_karp:;                                                          \
+    /* Too many false positives in 2-byte mode - switch to Rabin-Karp */       \
+    {                                                                          \
+        int64_t start_pos = search_ptr - search_start - off1;                  \
+        if (start_pos < 0) start_pos = 0;                                      \
+        int64_t rk_result = RK_IMPL(haystack + start_pos, haystack_len - start_pos, \
+                                    needle, needle_len);                       \
+        return (rk_result >= 0) ? start_pos + rk_result : -1;                  \
+    }                                                                          \
 }
 
 // =============================================================================
@@ -1808,9 +2314,10 @@ setup_2byte_mode:;                                                             \
 // =============================================================================
 
 // Internal implementations (always_inline static via macro)
-INDEX_IMPL(index_needle_exact_impl, 0, equal_exact)
-INDEX_IMPL(index_needle_fold_both_impl, 1, equal_fold_both)
-INDEX_IMPL(search_needle_fold_norm_impl, 1, equal_fold_normalized)
+// Each variant uses the appropriate Rabin-Karp fallback
+INDEX_IMPL(index_needle_exact_impl, 0, equal_exact, index_exact_rabin_karp_impl)
+INDEX_IMPL(index_needle_fold_both_impl, 1, equal_fold_both, index_fold_rabin_karp_impl)
+INDEX_IMPL(search_needle_fold_norm_impl, 1, equal_fold_normalized, index_prefolded_rabin_karp_impl)
 
 // =============================================================================
 // Wrapper functions for gocc (these have the gocc comments gocc needs)
