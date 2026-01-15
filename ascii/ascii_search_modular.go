@@ -13,6 +13,11 @@ const (
 )
 
 func resultExceeded(r uint64) bool {
+	// RESULT_NOT_FOUND is 0xFFFFFFFFFFFFFFFF which has bit 63 set,
+	// but it's NOT an exceeded result - it means "not found"
+	if r == ^uint64(0) {
+		return false
+	}
 	return r&exceededFlag != 0
 }
 
