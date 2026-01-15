@@ -38,14 +38,13 @@ TEXT ·indexFoldNEON(SB), NOSPLIT, $0-72
 	CMPW  $26, R10
 	BCS   not_letter1
 	MOVW  $0x20, R26              // mask = 0x20 (OR to force lowercase)
-	MOVW  R2, R27                 // target = rare1 (already lowercase)
 	B     setup_rare1
 not_letter1:
 	MOVW  $0x00, R26              // mask = 0x00 (OR with 0 = no change)
-	MOVW  R2, R27                 // target = byte itself
 setup_rare1:
+	// R2 = rare1 target (input byte, no longer used after setup)
 	VDUP  R26, V0.B16             // V0 = rare1 mask (broadcast)
-	VDUP  R27, V1.B16             // V1 = rare1 target (broadcast)
+	VDUP  R2, V1.B16              // V1 = rare1 target (broadcast)
 
 	// Magic constant for syndrome extraction
 	MOVD  $0x4010040140100401, R10
@@ -628,7 +627,7 @@ scalar_1byte_entry:
 scalar_1byte:
 	MOVBU (R10), R13
 	ORRW  R26, R13, R14           // OR with 0x20 (or 0x00 for non-letter)
-	CMPW  R27, R14
+	CMPW  R2, R14                 // R2 = rare1 target (input byte)
 	BNE   scalar_next_1byte
 
 	SUB   R11, R10, R16
@@ -1035,7 +1034,7 @@ scalar_nl_entry:
 
 scalar_nl:
 	MOVBU (R10), R13
-	CMPW  R27, R13                // Direct compare (no mask needed)
+	CMPW  R2, R13                 // R2 = rare1 target (input byte)
 	BNE   scalar_next_nl
 
 	SUB   R11, R10, R16
@@ -1479,7 +1478,7 @@ scalar_2byte:
 	// Check rare1 at current position (R10 points to off1 position)
 	MOVBU (R10), R13
 	ORRW  R26, R13, R14           // R26 = rare1 mask (OR with 0x20 or 0x00)
-	CMPW  R27, R14                // R27 = rare1 target
+	CMPW  R2, R14                 // R2 = rare1 target (input byte)
 	BNE   scalar_next_2byte
 
 	// Check rare2 at off2 position: current_ptr - off1 + off2

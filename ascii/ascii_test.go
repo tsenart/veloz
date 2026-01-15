@@ -1739,3 +1739,21 @@ func FuzzSearcherCaseSensitive(f *testing.F) {
 }
 
 // NOTE: Comprehensive benchmarks moved to ascii_bench_arm64_test.go as BenchmarkSearch
+
+// TestScalarPathVerifyFail is a regression test for a bug where the scalar path
+// in indexFold1Byte/indexFold1ByteRaw incorrectly reused SIMD syndrome clearing
+// logic after verification failed, causing garbage position values.
+func TestScalarPathVerifyFail(t *testing.T) {
+	// Haystack with 'q' at positions 21 and 31, needle is all '0's
+	// searchLen = 0, so only position 0 can be checked
+	// Position 0 matches first byte '0', but verify fails at 'q'
+	haystack := "000000000000000000000q000000000q"
+	needle := "00000000000000000000000000000000"
+
+	want := indexFoldGo(haystack, needle)
+	got := IndexFoldModular(haystack, needle)
+	if got != want {
+		t.Fatalf("IndexFoldModular() = %d, want %d\nhaystack: %q\nneedle: %q",
+			got, want, haystack, needle)
+	}
+}
