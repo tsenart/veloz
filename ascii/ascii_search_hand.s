@@ -1890,11 +1890,11 @@ fold1_found:
 //   R7  = rare2 byte (from normalized needle)
 //   R8  = rare1 mask (0x20 for letter, 0x00 for non-letter)
 //   R9  = searchLen = haystack_len - needle_len
-//   R10 = searchPtr (post-incremented by VLD1.P)
+//   R10 = ptr1 (searchPtr, post-incremented by VLD1.P)
 //   R11 = searchStart
 //   R12 = remaining bytes
 //   R13 = syndrome result
-//   R14 = path marker / chunk offset
+//   R14 = ptr2 (ptr1 + off2_delta, post-incremented by VLD1.P)
 //   R15 = bit position
 //   R16 = candidate position
 //   R24 = tail_mask_table ptr
@@ -1972,6 +1972,7 @@ fold2_setup:
 	// Setup pointers
 	ADD   R4, R0, R10             // R10 = searchPtr = haystack + off1
 	MOVD  R10, R11                // R11 = searchStart
+	ADD   R5, R10, R14            // R14 = ptr2 = ptr1 + off2_delta
 	ADD   $1, R9, R12             // R12 = remaining = searchLen + 1
 
 	// Initialize failure counter
@@ -1984,13 +1985,9 @@ fold2_setup:
 // 64-BYTE LOOP: Process 64 bytes per iteration
 // ============================================================================
 fold2_loop64:
-	// Load 64 bytes at rare1 position
+	// Load 64 bytes from both pointers with post-increment
 	VLD1.P 64(R10), [V16.B16, V17.B16, V18.B16, V19.B16]
-
-	// Load 64 bytes at rare2 position (R10-64+off2_delta)
-	SUB   $64, R10, R14
-	ADD   R5, R14, R14
-	VLD1  (R14), [V24.B16, V25.B16, V26.B16, V27.B16]
+	VLD1.P 64(R14), [V24.B16, V25.B16, V26.B16, V27.B16]
 
 	SUB   $64, R12, R12
 
@@ -2041,14 +2038,14 @@ fold2_end64:
 	VAND  V5.B16, V23.B16, V23.B16
 
 	// Check chunks 0-3
-	MOVD  $0, R14                 // chunk offset
+	MOVD  $0, R20                 // chunk offset (R20 not used in verify)
 
 fold2_check_chunk64:
-	CMP   $0, R14
+	CMP   $0, R20
 	BEQ   fold2_chunk64_0
-	CMP   $16, R14
+	CMP   $16, R20
 	BEQ   fold2_chunk64_1
-	CMP   $32, R14
+	CMP   $32, R20
 	BEQ   fold2_chunk64_2
 	B     fold2_chunk64_3
 
@@ -2075,7 +2072,7 @@ fold2_try64:
 	LSR   $1, R15, R15
 
 	SUB   $64, R10, R16
-	ADD   R14, R16, R16
+	ADD   R20, R16, R16
 	ADD   R15, R16, R16
 	SUB   R11, R16, R16           // R16 = candidate position
 
@@ -2096,8 +2093,8 @@ fold2_clear64:
 	CBNZ  R13, fold2_try64
 
 fold2_next_chunk64:
-	ADD   $16, R14
-	CMP   $64, R14
+	ADD   $16, R20
+	CMP   $64, R20
 	BLT   fold2_check_chunk64
 	CMP   $64, R12
 	BGE   fold2_loop64
@@ -2110,12 +2107,9 @@ fold2_loop16_entry:
 	BLT   fold2_scalar_entry
 
 fold2_loop16:
-	// Load 16 bytes at rare1 position
-	VLD1  (R10), [V16.B16]
-	// Load 16 bytes at rare2 position
-	ADD   R5, R10, R14
-	VLD1  (R14), [V17.B16]
-	ADD   $16, R10
+	// Load 16 bytes from both pointers with post-increment
+	VLD1.P 16(R10), [V16.B16]
+	VLD1.P 16(R14), [V17.B16]
 	SUB   $16, R12, R12
 
 	// Case-fold and compare
@@ -2150,7 +2144,7 @@ fold2_try16:
 	BGT   fold2_clear16
 
 	ADD   R0, R16, R17
-	MOVD  $0x100, R14             // Mark as 16-byte path
+	MOVD  $0x100, R20             // Mark as 16-byte path
 	B     fold2_verify
 
 fold2_clear16:
@@ -2321,7 +2315,7 @@ fold2_verify_fail:
 	BGT   fold2_exceeded
 
 	// Clear bit and continue
-	CMP   $0x100, R14
+	CMP   $0x100, R20
 	BEQ   fold2_clear16_from_verify
 	B     fold2_clear64_from_verify
 
@@ -2345,8 +2339,8 @@ fold2_clear64_from_verify:
 	SUB   $1, R17
 	BIC   R17, R13, R13
 	CBNZ  R13, fold2_try64
-	ADD   $16, R14
-	CMP   $64, R14
+	ADD   $16, R20
+	CMP   $64, R20
 	BLT   fold2_check_chunk64
 	CMP   $64, R12
 	BGE   fold2_loop64
@@ -3560,6 +3554,7 @@ raw2_setup:
 	// Setup pointers
 	ADD   R4, R0, R10             // R10 = searchPtr = haystack + off1
 	MOVD  R10, R11                // R11 = searchStart
+	ADD   R5, R10, R14            // R14 = ptr2 = ptr1 + off2_delta
 	ADD   $1, R9, R12             // R12 = remaining = searchLen + 1
 
 	// Initialize failure counter
@@ -3572,13 +3567,9 @@ raw2_setup:
 // 64-BYTE LOOP
 // ============================================================================
 raw2_loop64:
-	// Load 64 bytes at rare1 position
+	// Load 64 bytes from both pointers with post-increment
 	VLD1.P 64(R10), [V16.B16, V17.B16, V18.B16, V19.B16]
-
-	// Load 64 bytes at rare2 position
-	SUB   $64, R10, R14
-	ADD   R5, R14, R14
-	VLD1  (R14), [V24.B16, V25.B16, V26.B16, V27.B16]
+	VLD1.P 64(R14), [V24.B16, V25.B16, V26.B16, V27.B16]
 
 	SUB   $64, R12, R12
 
@@ -3628,14 +3619,14 @@ raw2_end64:
 	VAND  V5.B16, V22.B16, V22.B16
 	VAND  V5.B16, V23.B16, V23.B16
 
-	MOVD  $0, R14
+	MOVD  $0, R20                 // chunk offset (R20 not used in verify)
 
 raw2_check_chunk64:
-	CMP   $0, R14
+	CMP   $0, R20
 	BEQ   raw2_chunk64_0
-	CMP   $16, R14
+	CMP   $16, R20
 	BEQ   raw2_chunk64_1
-	CMP   $32, R14
+	CMP   $32, R20
 	BEQ   raw2_chunk64_2
 	B     raw2_chunk64_3
 
@@ -3662,7 +3653,7 @@ raw2_try64:
 	LSR   $1, R15, R15
 
 	SUB   $64, R10, R16
-	ADD   R14, R16, R16
+	ADD   R20, R16, R16
 	ADD   R15, R16, R16
 	SUB   R11, R16, R16
 
@@ -3682,8 +3673,8 @@ raw2_clear64:
 	CBNZ  R13, raw2_try64
 
 raw2_next_chunk64:
-	ADD   $16, R14
-	CMP   $64, R14
+	ADD   $16, R20
+	CMP   $64, R20
 	BLT   raw2_check_chunk64
 	CMP   $64, R12
 	BGE   raw2_loop64
@@ -3696,10 +3687,9 @@ raw2_loop16_entry:
 	BLT   raw2_scalar_entry
 
 raw2_loop16:
-	VLD1  (R10), [V16.B16]
-	ADD   R5, R10, R14
-	VLD1  (R14), [V17.B16]
-	ADD   $16, R10
+	// Load 16 bytes from both pointers with post-increment
+	VLD1.P 16(R10), [V16.B16]
+	VLD1.P 16(R14), [V17.B16]
 	SUB   $16, R12, R12
 
 	VORR  V0.B16, V16.B16, V20.B16
@@ -3733,7 +3723,7 @@ raw2_try16:
 	BGT   raw2_clear16
 
 	ADD   R0, R16, R17
-	MOVD  $0x100, R14
+	MOVD  $0x100, R20             // Mark as 16-byte path
 	B     raw2_verify
 
 raw2_clear16:
@@ -3907,7 +3897,7 @@ raw2_verify_fail:
 	CMP   R17, R25
 	BGT   raw2_exceeded
 
-	CMP   $0x100, R14
+	CMP   $0x100, R20
 	BEQ   raw2_clear16_from_verify
 	B     raw2_clear64_from_verify
 
@@ -3931,8 +3921,8 @@ raw2_clear64_from_verify:
 	SUB   $1, R17
 	BIC   R17, R13, R13
 	CBNZ  R13, raw2_try64
-	ADD   $16, R14
-	CMP   $64, R14
+	ADD   $16, R20
+	CMP   $64, R20
 	BLT   raw2_check_chunk64
 	CMP   $64, R12
 	BGE   raw2_loop64
