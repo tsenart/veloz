@@ -1814,3 +1814,98 @@ func BenchmarkIndexFoldCompare(b *testing.B) {
 		}
 	}
 }
+
+// =============================================================================
+// BenchmarkSearchMatrix: Full comparison matrix
+// Covers: case-sensitive vs case-insensitive, ad-hoc vs Searcher API
+// =============================================================================
+
+func BenchmarkSearchMatrix(b *testing.B) {
+	type benchCase struct {
+		name     string
+		haystack string
+		needle   string
+	}
+
+	cases := []benchCase{
+		// Core size variations
+		{"size/64B", strings.Repeat("x", 60) + "test", "test"},
+		{"size/1KB", strings.Repeat("x", 1020) + "test", "test"},
+		{"size/4KB", strings.Repeat("x", 4092) + "test", "test"},
+
+		// Match positions
+		{"pos/start", "test" + strings.Repeat("x", 1020), "test"},
+		{"pos/middle", strings.Repeat("x", 510) + "test" + strings.Repeat("x", 510), "test"},
+
+		// Not found
+		{"notfound/1KB", strings.Repeat("abcdefghij", 102), "xyz"},
+
+		// Pathological
+		{"periodic/long", strings.Repeat("abcd", 256) + "abce", "abce"},
+
+		// Real-world
+		{"realworld/json", strings.Repeat(`{"key":"value","cnt":123},`, 180) + `{"num":999}`, `"num"`},
+	}
+
+	// Case-insensitive: ad-hoc API
+	b.Run("fold/adhoc", func(b *testing.B) {
+		for _, tc := range cases {
+			b.Run(tc.name, func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					IndexFoldModular(tc.haystack, tc.needle)
+				}
+			})
+		}
+	})
+
+	// Case-insensitive: Searcher API (pre-computed)
+	b.Run("fold/searcher", func(b *testing.B) {
+		for _, tc := range cases {
+			s := NewSearcher(tc.needle, false)
+			b.Run(tc.name, func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					s.IndexModular(tc.haystack)
+				}
+			})
+		}
+	})
+
+	// Case-sensitive: ad-hoc API
+	b.Run("exact/adhoc", func(b *testing.B) {
+		for _, tc := range cases {
+			b.Run(tc.name, func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					IndexExactModular(tc.haystack, tc.needle)
+				}
+			})
+		}
+	})
+
+	// Case-sensitive: Searcher API (pre-computed)
+	b.Run("exact/searcher", func(b *testing.B) {
+		for _, tc := range cases {
+			s := NewSearcher(tc.needle, true)
+			b.Run(tc.name, func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					s.IndexModular(tc.haystack)
+				}
+			})
+		}
+	})
+
+	// Baseline: strings.Index (case-sensitive only)
+	b.Run("stdlib", func(b *testing.B) {
+		for _, tc := range cases {
+			b.Run(tc.name, func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					strings.Index(tc.haystack, tc.needle)
+				}
+			})
+		}
+	})
+}
