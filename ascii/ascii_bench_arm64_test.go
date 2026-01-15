@@ -3,375 +3,173 @@
 package ascii
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 )
 
 var benchSink int
 
-// BenchmarkPureScan tests raw scan throughput without matches (best case).
-func BenchmarkPureScan(b *testing.B) {
-	sizes := []struct {
-		name string
-		size int
-	}{
-		{"1KB", 1024},
-		{"64KB", 64 * 1024},
-		{"1MB", 1024 * 1024},
-		{"16MB", 16 * 1024 * 1024},
+// =============================================================================
+// BenchmarkSearch: Unified comprehensive benchmark for all search implementations
+//
+// Naming: BenchmarkSearch/mode=exact/scenario=notfound/size=1KB/impl=stdlib
+// This enables easy benchstat comparison with:
+//   benchstat -filter '/scenario:notfound' old.txt new.txt
+//   benchstat -filter '/impl:stdlib' old.txt new.txt
+// =============================================================================
+
+func BenchmarkSearch(b *testing.B) {
+	type benchCase struct {
+		scenario string
+		size     string
+		haystack string
+		needle   string
 	}
 
-	needleStr := "quartz"
-	needle := NewSearcher(needleStr, false)
-
-	for _, s := range sizes {
-		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24)
-
-		b.Run(s.name+"/strings.Index", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = strings.Index(haystack, needleStr)
-			}
-		})
-
-		b.Run(s.name+"/IndexFold", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = IndexFold(haystack, needleStr)
-			}
-		})
-
-		b.Run(s.name+"/SearchNeedle", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = needle.Index(haystack)
-			}
-		})
-
-	}
-}
-
-// BenchmarkMatchAtEnd tests full scan + verification (typical case).
-func BenchmarkMatchAtEnd(b *testing.B) {
-	sizes := []struct {
-		name string
-		size int
-	}{
-		{"1KB", 1024},
-		{"64KB", 64 * 1024},
-		{"1MB", 1024 * 1024},
+	name := func(scenario, size, impl string) string {
+		return "scenario=" + scenario + "/size=" + size + "/impl=" + impl
 	}
 
-	needleStr := "xylophone"
-	needle := NewSearcher(needleStr, false)
+	// Generate comprehensive test cases
+	cases := []benchCase{
+		// Pure scan (no match) - tests raw throughput
+		{"notfound", "1KB", strings.Repeat("abcdefghijklmnoprstuvwy ", 43), "quartz"},
+		{"notfound", "64KB", strings.Repeat("abcdefghijklmnoprstuvwy ", 2730), "quartz"},
+		{"notfound", "1MB", strings.Repeat("abcdefghijklmnoprstuvwy ", 43690), "quartz"},
 
-	for _, s := range sizes {
-		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24) + needleStr
+		// Match at end - tests full scan + verification
+		{"match_end", "1KB", strings.Repeat("abcdefghijklmnoprstuvwy ", 42) + "xylophone", "xylophone"},
+		{"match_end", "64KB", strings.Repeat("abcdefghijklmnoprstuvwy ", 2728) + "xylophone", "xylophone"},
+		{"match_end", "1MB", strings.Repeat("abcdefghijklmnoprstuvwy ", 43688) + "xylophone", "xylophone"},
 
-		b.Run(s.name+"/strings.Index", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = strings.Index(haystack, needleStr)
-			}
-		})
+		// Match at start - tests early exit
+		{"match_start", "1KB", "xylophone" + strings.Repeat("abcdefghijklmnoprstuvwy ", 42), "xylophone"},
 
-		b.Run(s.name+"/IndexFold", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = IndexFold(haystack, needleStr)
-			}
-		})
+		// Match in middle
+		{"match_mid", "1KB", strings.Repeat("x", 500) + "needle" + strings.Repeat("y", 500), "needle"},
 
-		b.Run(s.name+"/SearchNeedle", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = needle.Index(haystack)
-			}
-		})
+		// JSON-like data (high false positives from quotes)
+		{"json", "1KB", strings.Repeat(`{"k":"v"},`, 100) + `{"num":1}`, `"num"`},
+		{"json", "64KB", strings.Repeat(`{"k":"v"},`, 6500) + `{"num":1}`, `"num"`},
 
-	}
-}
+		// Periodic patterns (stress 2-byte filter)
+		{"periodic", "1KB", strings.Repeat("abcd", 250) + "abce", "abce"},
 
-// BenchmarkHighFalsePositive tests worst-case scenarios.
-func BenchmarkHighFalsePositive(b *testing.B) {
-	sizes := []struct {
-		name string
-		size int
-	}{
-		{"2KB", 2 * 1024},
-		{"64KB", 64 * 1024},
-		{"1MB", 1024 * 1024},
+		// Same char (worst case - triggers Rabin-Karp fallback)
+		{"samechar", "1KB", strings.Repeat("a", 1000) + "aab", "aab"},
+		{"samechar", "64KB", strings.Repeat("a", 64000) + "aab", "aab"},
+
+		// Rare bytes (best case - few false positives)
+		{"rarebyte", "1KB", strings.Repeat("abcdefghijklmnoprstuvwy ", 42) + "quartz", "quartz"},
+		{"rarebyte", "64KB", strings.Repeat("abcdefghijklmnoprstuvwy ", 2728) + "quartz", "quartz"},
+
+		// Different needle lengths
+		{"needle3", "1KB", strings.Repeat("x", 1000) + "abc", "abc"},
+		{"needle8", "1KB", strings.Repeat("x", 1000) + "abcdefgh", "abcdefgh"},
+		{"needle16", "1KB", strings.Repeat("x", 1000) + "abcdefghijklmnop", "abcdefghijklmnop"},
 	}
 
-	// JSON-like data (many " characters)
-	jsonPattern := `{"key":"value","cnt":123},`
-	jsonNeedleStr := `"num"`
-	jsonNeedle := NewSearcher(jsonNeedleStr, false)
+	// Case-sensitive implementations
+	b.Run("mode=exact", func(b *testing.B) {
+		for _, tc := range cases {
+			// strings.Index (stdlib baseline)
+			b.Run(name(tc.scenario, tc.size, "stdlib"), func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = strings.Index(tc.haystack, tc.needle)
+				}
+			})
 
-	for _, s := range sizes {
-		jsonHaystack := strings.Repeat(jsonPattern, s.size/len(jsonPattern)) + `{"num":999}`
+			// IndexExactModular (ad-hoc, staged kernels)
+			b.Run(name(tc.scenario, tc.size, "modular"), func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = IndexExactModular(tc.haystack, tc.needle)
+				}
+			})
 
-		b.Run("JSON-"+s.name+"/strings.Index", func(b *testing.B) {
-			b.SetBytes(int64(len(jsonHaystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = strings.Index(jsonHaystack, jsonNeedleStr)
-			}
-		})
+			// Searcher with pre-computed rare bytes (case-sensitive)
+			searcher := NewSearcher(tc.needle, true)
+			b.Run(name(tc.scenario, tc.size, "searcher"), func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = searcher.Index(tc.haystack)
+				}
+			})
 
-		b.Run("JSON-"+s.name+"/IndexFold", func(b *testing.B) {
-			b.SetBytes(int64(len(jsonHaystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = IndexFold(jsonHaystack, jsonNeedleStr)
-			}
-		})
+			// Searcher.IndexModular (pre-computed + staged kernels)
+			b.Run(name(tc.scenario, tc.size, "searcher_mod"), func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = searcher.IndexModular(tc.haystack)
+				}
+			})
 
-		b.Run("JSON-"+s.name+"/SearchNeedle", func(b *testing.B) {
-			b.SetBytes(int64(len(jsonHaystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = jsonNeedle.Index(jsonHaystack)
-			}
-		})
-	}
-
-	// All same char (worst case for 1-byte search)
-	sameCharNeedleStr := "aab"
-	sameCharNeedle := NewSearcher(sameCharNeedleStr, false)
-
-	for _, s := range sizes {
-		sameCharHaystack := strings.Repeat("a", s.size) + "aab"
-
-		b.Run("SameChar-"+s.name+"/SearchNeedle", func(b *testing.B) {
-			b.SetBytes(int64(len(sameCharHaystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = sameCharNeedle.Index(sameCharHaystack)
-			}
-		})
-	}
-}
-
-// BenchmarkThresholdSweep tests various sizes around the 32/128-byte loop cutover.
-func BenchmarkThresholdSweep(b *testing.B) {
-	sizes := []int{
-		256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 3072, 4096, 8192,
-	}
-
-	needle := NewSearcher("quartz", false) // letter needle
-
-	for _, size := range sizes {
-		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", size/24)
-
-		b.Run(fmt.Sprintf("%dB/NEON", size), func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = indexFoldNEON(haystack, needle.rare1, needle.off1, needle.rare2, needle.off2, needle.norm)
-			}
-		})
-
-		b.Run(fmt.Sprintf("%dB/Go", size), func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = strings.Index(haystack, "quartz")
-			}
-		})
-	}
-}
-
-// BenchmarkCutoverContinue tests the optimization where 2-byte mode continues
-// from current position instead of restarting from the beginning.
-// This matters when cutover happens late in a large haystack.
-func BenchmarkCutoverContinue(b *testing.B) {
-	// Large haystack with rare characters (no false positives) for first ~50KB
-	// Then dense false positives that trigger cutover, followed by match
-	prefix := strings.Repeat("x", 50000) // 50KB of no-match chars
-	falsePos := strings.Repeat("h", 500) // 500 'h' chars = false positives for 'H'
-	suffix := "HHHHHHHH0"                // The actual match
-	haystack := prefix + falsePos + suffix
-
-	needle := NewSearcher("HHHHHHHH0", false)
-	expected := len(prefix) + len(falsePos)
-
-	b.SetBytes(int64(len(haystack)))
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		result := needle.Index(haystack)
-		if result != expected {
-			b.Fatalf("wrong result: got %d, want %d", result, expected)
+			// Searcher with corpus-computed ranks (optimal rare byte selection)
+			ranks := buildRankTable(tc.haystack)
+			corpusSearcher := NewSearcherWithRanks(tc.needle, ranks[:], true)
+			b.Run(name(tc.scenario, tc.size, "corpus_mod"), func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = corpusSearcher.IndexModular(tc.haystack)
+				}
+			})
 		}
-	}
-}
+	})
 
-// BenchmarkNonLetterNeedle tests non-letter rare bytes (uses faster VAND-free path).
-func BenchmarkNonLetterNeedle(b *testing.B) {
-	sizes := []struct {
-		name string
-		size int
-	}{
-		{"1KB", 1024},
-		{"64KB", 64 * 1024},
-		{"1MB", 1024 * 1024},
-	}
+	// Case-insensitive implementations
+	b.Run("mode=fold", func(b *testing.B) {
+		for _, tc := range cases {
+			// IndexFold (asm, rare-byte selection)
+			b.Run(name(tc.scenario, tc.size, "asm"), func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = IndexFold(tc.haystack, tc.needle)
+				}
+			})
 
-	// Needle with digits (non-letter rare bytes)
-	needleStr := "12345"
-	needle := NewSearcher(needleStr, false)
+			// IndexFoldModular (staged kernels)
+			b.Run(name(tc.scenario, tc.size, "modular"), func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = IndexFoldModular(tc.haystack, tc.needle)
+				}
+			})
 
-	for _, s := range sizes {
-		// Haystack without digits (pure scan, no match)
-		haystack := strings.Repeat("abcdefghijklmnopqrstuvwxyz", s.size/26)
+			// Searcher (pre-computed, case-insensitive)
+			searcher := NewSearcher(tc.needle, false)
+			b.Run(name(tc.scenario, tc.size, "searcher"), func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = searcher.Index(tc.haystack)
+				}
+			})
 
-		b.Run("PureScan-"+s.name+"/strings.Index", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = strings.Index(haystack, needleStr)
-			}
-		})
+			// Searcher.IndexModular
+			b.Run(name(tc.scenario, tc.size, "searcher_mod"), func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = searcher.IndexModular(tc.haystack)
+				}
+			})
 
-		b.Run("PureScan-"+s.name+"/IndexFold", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = IndexFold(haystack, needleStr)
-			}
-		})
+			// Searcher with corpus-computed ranks (optimal rare byte selection)
+			ranks := buildRankTable(tc.haystack)
+			corpusSearcher := NewSearcherWithRanks(tc.needle, ranks[:], false)
+			b.Run(name(tc.scenario, tc.size, "corpus_mod"), func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = corpusSearcher.IndexModular(tc.haystack)
+				}
+			})
 
-		b.Run("PureScan-"+s.name+"/SearchNeedle", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = needle.Index(haystack)
-			}
-		})
-	}
-
-	// Match at end
-	for _, s := range sizes {
-		haystack := strings.Repeat("abcdefghijklmnopqrstuvwxyz", s.size/26) + needleStr
-
-		b.Run("MatchEnd-"+s.name+"/strings.Index", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = strings.Index(haystack, needleStr)
-			}
-		})
-
-		b.Run("MatchEnd-"+s.name+"/IndexFold", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = IndexFold(haystack, needleStr)
-			}
-		})
-
-		b.Run("MatchEnd-"+s.name+"/SearchNeedle", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = needle.Index(haystack)
-			}
-		})
-	}
-}
-
-// BenchmarkCaseSensitive compares case-sensitive search variants.
-func BenchmarkCaseSensitive(b *testing.B) {
-	sizes := []struct {
-		name string
-		size int
-	}{
-		{"1KB", 1024},
-		{"64KB", 64 * 1024},
-		{"1MB", 1024 * 1024},
-	}
-
-	needleStr := "xylophone"
-	needle := NewSearcher(needleStr, true) // case-sensitive
-
-	for _, s := range sizes {
-		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24) + needleStr
-
-		b.Run(s.name+"/strings.Index", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = strings.Index(haystack, needleStr)
-			}
-		})
-
-		b.Run(s.name+"/Searcher.Index", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = needle.Index(haystack)
-			}
-		})
-	}
-}
-
-// BenchmarkCaseSensitiveFair uses a needle where first byte IS in haystack.
-// This makes strings.Index do similar work (scanning with false positives).
-func BenchmarkCaseSensitiveFair(b *testing.B) {
-	sizes := []struct {
-		name string
-		size int
-	}{
-		{"1KB", 1024},
-		{"64KB", 64 * 1024},
-		{"1MB", 1024 * 1024},
-	}
-
-	// "elephant" starts with 'e' which IS in the haystack pattern.
-	// Both strings.Index and Searcher will have false positives to handle.
-	needleStr := "elephant"
-	needle := NewSearcher(needleStr, true) // case-sensitive
-
-	for _, s := range sizes {
-		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24) + needleStr
-
-		b.Run(s.name+"/strings.Index", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = strings.Index(haystack, needleStr)
-			}
-		})
-
-		b.Run(s.name+"/Searcher.Index", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = needle.Index(haystack)
-			}
-		})
-	}
-}
-
-// BenchmarkCaseSensitiveNoMatch tests pure scan (no match in haystack).
-// Uses needle with first byte NOT in haystack for apples-to-apples comparison.
-func BenchmarkCaseSensitiveNoMatch(b *testing.B) {
-	sizes := []struct {
-		name string
-		size int
-	}{
-		{"1KB", 1024},
-		{"64KB", 64 * 1024},
-		{"1MB", 1024 * 1024},
-	}
-
-	// "zzz123" has 'z' as first byte which is NOT in haystack.
-	// Both should scan at full speed with no false positives.
-	needleStr := "zzz123"
-	needle := NewSearcher(needleStr, true) // case-sensitive
-
-	for _, s := range sizes {
-		// Haystack has no 'z' or digits
-		haystack := strings.Repeat("abcdefghijklmnoprstuvwy ", s.size/24)
-
-		b.Run(s.name+"/strings.Index", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = strings.Index(haystack, needleStr)
-			}
-		})
-
-		b.Run(s.name+"/Searcher.Index", func(b *testing.B) {
-			b.SetBytes(int64(len(haystack)))
-			for i := 0; i < b.N; i++ {
-				benchSink = needle.Index(haystack)
-			}
-		})
-	}
+			// IndexFoldOriginal (for regression comparison)
+			b.Run(name(tc.scenario, tc.size, "original"), func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					benchSink = IndexFoldOriginal(tc.haystack, tc.needle)
+				}
+			})
+		}
+	})
 }
