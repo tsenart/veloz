@@ -882,6 +882,11 @@ func FuzzIndexFold(f *testing.F) {
 		if modRes != want {
 			t.Fatalf("IndexFoldModular(%q, %q) = %v; want %v", istr, isubstr, modRes, want)
 		}
+
+		origRes := IndexFoldOriginal(istr, isubstr)
+		if origRes != want {
+			t.Fatalf("IndexFoldOriginal(%q, %q) = %v; want %v", istr, isubstr, origRes, want)
+		}
 	})
 }
 
@@ -1731,4 +1736,81 @@ func FuzzSearcherCaseSensitive(f *testing.F) {
 				haystack, needle, got, modGot)
 		}
 	})
+}
+
+// =============================================================================
+// BenchmarkIndexFoldCompare: Comprehensive 3-way comparison
+// Compares: original (first2/last2), asm (handwritten rare-byte), modular (staged kernels)
+// Naming: BenchmarkIndexFoldCompare/<impl>/<case>-<size> for benchstat compatibility
+// =============================================================================
+
+func BenchmarkIndexFoldCompare(b *testing.B) {
+	type benchCase struct {
+		name     string
+		haystack string
+		needle   string
+	}
+
+	// Generate test cases covering different scenarios
+	cases := []benchCase{
+		// Size variations: match at end (full scan)
+		{"size/32B", strings.Repeat("x", 28) + "test", "test"},
+		{"size/64B", strings.Repeat("x", 60) + "test", "test"},
+		{"size/256B", strings.Repeat("x", 252) + "test", "test"},
+		{"size/1KB", strings.Repeat("x", 1020) + "test", "test"},
+		{"size/4KB", strings.Repeat("x", 4092) + "test", "test"},
+
+		// Match position variations (1KB haystack)
+		{"pos/start", "test" + strings.Repeat("x", 1020), "test"},
+		{"pos/middle", strings.Repeat("x", 510) + "test" + strings.Repeat("x", 510), "test"},
+		{"pos/end", strings.Repeat("x", 1020) + "test", "test"},
+
+		// Not found (full scan, no match)
+		{"notfound/1KB", strings.Repeat("abcdefghij", 102), "xyz"},
+		{"notfound/4KB", strings.Repeat("abcdefghij", 410), "xyz"},
+
+		// Needle length variations
+		{"needle/3B", strings.Repeat("x", 1000) + "abc", "abc"},
+		{"needle/8B", strings.Repeat("x", 1000) + "abcdefgh", "abcdefgh"},
+		{"needle/16B", strings.Repeat("x", 1000) + "abcdefghijklmnop", "abcdefghijklmnop"},
+		{"needle/32B", strings.Repeat("x", 1000) + strings.Repeat("a", 32), strings.Repeat("a", 32)},
+
+		// Case folding stress (mixed case)
+		{"casefold/mixed", strings.Repeat("AbCd", 250) + "TeSt", "test"},
+		{"casefold/upper", strings.Repeat("ABCD", 250) + "TEST", "test"},
+
+		// Pathological: torture test (many false positives)
+		{"torture/repeat", strings.Repeat("ABC", 512) + "123" + strings.Repeat("ABC", 512), strings.Repeat("ABC", 513)},
+
+		// Periodic patterns (stress 2-byte filter)
+		{"periodic/short", strings.Repeat("ab", 512) + "ac", "ac"},
+		{"periodic/long", strings.Repeat("abcd", 256) + "abce", "abce"},
+
+		// Real-world: JSON-like data
+		{"realworld/json", strings.Repeat(`{"key":"value","cnt":123},`, 180) + `{"num":999}`, `"num"`},
+
+		// Rare bytes (should be fast - few false positives)
+		{"rarebyte/qz", strings.Repeat("abcdefghijklmnoprstuvwy ", 200) + "quartz", "quartz"},
+	}
+
+	impls := []struct {
+		name string
+		fn   func(string, string) int
+	}{
+		{"original", IndexFoldOriginal},
+		{"asm", IndexFold},
+		{"modular", IndexFoldModular},
+	}
+
+	for _, impl := range impls {
+		for _, tc := range cases {
+			name := impl.name + "/" + tc.name
+			b.Run(name, func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					impl.fn(tc.haystack, tc.needle)
+				}
+			})
+		}
+	}
 }
