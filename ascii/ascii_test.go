@@ -1908,4 +1908,18 @@ func BenchmarkSearchMatrix(b *testing.B) {
 			})
 		}
 	})
+
+	// Ad-hoc with full cost (including what Searcher amortizes)
+	b.Run("fold/adhoc_full", func(b *testing.B) {
+		for _, tc := range cases {
+			b.Run(tc.name, func(b *testing.B) {
+				b.SetBytes(int64(len(tc.haystack)))
+				for i := 0; i < b.N; i++ {
+					// This is what you'd pay if creating Searcher each time
+					s := NewSearcher(tc.needle, false)
+					s.IndexModular(tc.haystack)
+				}
+			})
+		}
+	})
 }
