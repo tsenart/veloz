@@ -303,9 +303,8 @@ clear_bit32_exact1:
 	// No more matches in this 32-byte chunk - fall through to 16-byte or scalar loop
 
 loop16_exact1:
-	// Use signed comparison to handle negative R10 after SUBS overflow
-	CMP   $15, R10
-	BLE   scalar_exact1               // Branch if R10 <= 15 (signed)
+	CMP   $16, R10
+	BLT   scalar_exact1
 
 loop16_inner_exact1:
 	VLD1.P 16(R11), [V1.B16]
@@ -315,11 +314,12 @@ loop16_inner_exact1:
 	VADDP  V3.B16, V3.B16, V3.B16
 	VADDP  V3.B16, V3.B16, V3.B16
 	VMOV   V3.S[0], R15
-	BLS    end16_exact1
-	CBZ    R15, loop16_inner_exact1
+	CBNZ   R15, end16_exact1          // match found
+	CMP    $16, R10                   // no match - check if we can continue
+	BGE    loop16_inner_exact1
+	B      scalar_exact1              // not enough bytes for another iteration
 
 end16_exact1:
-	CBZ   R15, scalar_exact1
 
 process16_exact1:
 	RBIT  R15, R16
@@ -650,11 +650,12 @@ loop16_inner_exact2:
 	VADDP V19.B16, V19.B16, V19.B16
 	VMOV  V19.S[0], R15
 
-	BLS   end16_exact2
-	CBZ   R15, loop16_inner_exact2
+	CBNZ  R15, end16_exact2           // match found
+	CMP   $16, R10                    // no match - check if we can continue
+	BGE   loop16_inner_exact2
+	B     scalar_exact2               // not enough bytes for another iteration
 
 end16_exact2:
-	CBZ   R15, scalar_exact2
 
 process16_exact2:
 	RBIT  R15, R17
