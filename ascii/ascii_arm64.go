@@ -94,6 +94,6 @@ func (s Searcher) Index(haystack string) int {
 	if s.caseSensitive {
 		return IndexNEON(haystack, s.rare1, s.off1, s.rare2, s.off2, s.raw)
 	}
-	// Use pre-normalized pattern for faster case-insensitive verification
-	return SearchNeedleFold(haystack, s.rare1, s.off1, s.rare2, s.off2, s.norm)
+	// Use handwritten assembly implementation with pre-computed rare bytes
+	return indexFoldNEON(haystack, s.rare1, s.off1, s.rare2, s.off2, s.norm)
 }

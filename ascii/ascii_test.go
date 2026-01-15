@@ -445,6 +445,13 @@ func BenchmarkAsciiIndexFold(b *testing.B) {
 			}
 		})
 
+		b.Run(fmt.Sprintf("modular-%d", n), func(b *testing.B) {
+			b.SetBytes(int64(len(s1)))
+			for i := 0; i < b.N; i++ {
+				IndexFoldModular(s1, s2)
+			}
+		})
+
 	}
 }
 
@@ -484,6 +491,11 @@ func BenchmarkIndexTorture(b *testing.B) {
 		}
 	})
 
+	b.Run("modular", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			IndexFoldModular(benchInputTorture, benchNeedleTorture)
+		}
+	})
 }
 
 func BenchmarkIndexPeriodic(b *testing.B) {
@@ -864,6 +876,11 @@ func FuzzIndexFold(f *testing.F) {
 		rkGoRes := indexFoldRabinKarpGo(istr, isubstr)
 		if rkGoRes != want {
 			t.Fatalf("indexFoldRabinKarpGo(%q, %q) = %v; want %v", istr, isubstr, rkGoRes, want)
+		}
+
+		modRes := IndexFoldModular(istr, isubstr)
+		if modRes != want {
+			t.Fatalf("IndexFoldModular(%q, %q) = %v; want %v", istr, isubstr, modRes, want)
 		}
 	})
 }
@@ -1706,6 +1723,12 @@ func FuzzSearcherCaseSensitive(f *testing.F) {
 		if got != sGot {
 			t.Fatalf("strings.Index vs Searcher.Index mismatch: strings.Index(%q, %q) = %d, Searcher.Index = %d",
 				haystack, needle, got, sGot)
+		}
+
+		modGot := IndexExactModular(haystack, needle)
+		if got != modGot {
+			t.Fatalf("strings.Index vs IndexExactModular mismatch: strings.Index(%q, %q) = %d, IndexExactModular = %d",
+				haystack, needle, got, modGot)
 		}
 	})
 }

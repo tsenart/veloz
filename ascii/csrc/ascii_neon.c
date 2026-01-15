@@ -2331,7 +2331,6 @@ fallback_rabin_karp:;                                                          \
 // Internal implementations (always_inline static via macro)
 // Each variant uses the appropriate Rabin-Karp fallback
 INDEX_IMPL(index_needle_exact_impl, 0, equal_exact, index_exact_rabin_karp_impl)
-INDEX_IMPL(search_needle_fold_norm_impl, 1, equal_fold_normalized, index_prefolded_rabin_karp_impl)
 
 // =============================================================================
 // Wrapper functions for gocc (these have the gocc comments gocc needs)
@@ -2345,15 +2344,5 @@ __attribute__((noinline)) int64_t index_neon(unsigned char *haystack, int64_t ha
     unsigned char *needle, int64_t needle_len)
 {
     volatile int64_t result = index_needle_exact_impl(haystack, haystack_len, rare1, off1, rare2, off2, needle, needle_len);
-    return result;
-}
-
-// Case-insensitive search (pre-normalized needle) - for Searcher.IndexFold / SearchNeedle
-// gocc: SearchNeedleFold(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int
-__attribute__((noinline)) int64_t search_needle_fold(unsigned char *haystack, int64_t haystack_len,
-    uint8_t rare1, int64_t off1, uint8_t rare2, int64_t off2,
-    unsigned char *needle, int64_t needle_len)
-{
-    volatile int64_t result = search_needle_fold_norm_impl(haystack, haystack_len, rare1, off1, rare2, off2, needle, needle_len);
     return result;
 }
