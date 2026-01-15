@@ -2425,9 +2425,9 @@ raw1_setup:
 	VMOV  R8, V5.D[0]
 	VMOV  R8, V5.D[1]
 
-	// Constants for dual-normalize verification
-	// V2 = 191 (-65 as unsigned), V3 = 26, V4 = 32 (0x20)
-	WORD  $0x4f05e7e2             // VMOVI $191, V2.B16
+	// Constants for verification (XOR-based, same as fold1)
+	// V2 = 159 (-97 as unsigned), V3 = 26, V4 = 32 (0x20)
+	WORD  $0x4f04e7e2             // VMOVI $159, V2.B16
 	WORD  $0x4f00e743             // VMOVI $26, V3.B16
 	WORD  $0x4f01e404             // VMOVI $32, V4.B16
 	MOVD  $tail_mask_table<>(SB), R24  // R24 = tail mask table
@@ -3135,16 +3135,16 @@ raw1_scalar_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	VADD  V2.B16, V10.B16, V16.B16
-	VADD  V2.B16, V11.B16, V17.B16
-	WORD  $0x6e303470               // VCMHI V16.B16, V3.B16, V16.B16
-	WORD  $0x6e313471               // VCMHI V17.B16, V3.B16, V17.B16
-	VAND  V4.B16, V16.B16, V16.B16
-	VAND  V4.B16, V17.B16, V17.B16
-	VORR  V10.B16, V16.B16, V10.B16
-	VORR  V11.B16, V17.B16, V11.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	// XOR-based case-insensitive compare
+	VEOR  V10.B16, V11.B16, V12.B16   // V12 = diff
+	VCMEQ V4.B16, V12.B16, V14.B16    // V14 = (diff == 0x20) ? 0xFF : 0
+	VORR  V4.B16, V10.B16, V16.B16    // V16 = haystack | 0x20
+	VADD  V2.B16, V16.B16, V16.B16    // V16 = (haystack | 0x20) + 159
+	WORD  $0x6e303470                 // VCMHI V16.B16, V3.B16, V16.B16 (is_letter)
+	VAND  V14.B16, V16.B16, V16.B16   // V16 = (diff==0x20) AND is_letter
+	VAND  V4.B16, V16.B16, V16.B16    // V16 = tolerable diff mask
+	VEOR  V16.B16, V12.B16, V10.B16   // V10 = diff XOR tolerable = real mismatch
+	WORD  $0x6e30a94a                 // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, raw1_scalar_vloop
 	B     raw1_scalar_verify_fail
@@ -3157,17 +3157,17 @@ raw1_scalar_vtail:
 	VLD1  (R22), [V11.B16]
 	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
 
-	VADD  V2.B16, V10.B16, V16.B16
-	VADD  V2.B16, V11.B16, V17.B16
-	WORD  $0x6e303470               // VCMHI V16.B16, V3.B16, V16.B16
-	WORD  $0x6e313471               // VCMHI V17.B16, V3.B16, V17.B16
-	VAND  V4.B16, V16.B16, V16.B16
-	VAND  V4.B16, V17.B16, V17.B16
-	VORR  V10.B16, V16.B16, V10.B16
-	VORR  V11.B16, V17.B16, V11.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16
-	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	// XOR-based case-insensitive compare
+	VEOR  V10.B16, V11.B16, V12.B16   // V12 = diff
+	VCMEQ V4.B16, V12.B16, V14.B16    // V14 = (diff == 0x20) ? 0xFF : 0
+	VORR  V4.B16, V10.B16, V16.B16    // V16 = haystack | 0x20
+	VADD  V2.B16, V16.B16, V16.B16    // V16 = (haystack | 0x20) + 159
+	WORD  $0x6e303470                 // VCMHI V16.B16, V3.B16, V16.B16 (is_letter)
+	VAND  V14.B16, V16.B16, V16.B16   // V16 = (diff==0x20) AND is_letter
+	VAND  V4.B16, V16.B16, V16.B16    // V16 = tolerable diff mask
+	VEOR  V16.B16, V12.B16, V10.B16   // V10 = diff XOR tolerable = real mismatch
+	VAND  V13.B16, V10.B16, V10.B16   // Mask out bytes beyond needle
+	WORD  $0x6e30a94a                 // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, raw1_scalar_verify_fail
 	B     raw1_found
@@ -3194,16 +3194,16 @@ raw1_scalar_nl_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	VADD  V2.B16, V10.B16, V16.B16
-	VADD  V2.B16, V11.B16, V17.B16
-	WORD  $0x6e303470               // VCMHI V16.B16, V3.B16, V16.B16
-	WORD  $0x6e313471               // VCMHI V17.B16, V3.B16, V17.B16
-	VAND  V4.B16, V16.B16, V16.B16
-	VAND  V4.B16, V17.B16, V17.B16
-	VORR  V10.B16, V16.B16, V10.B16
-	VORR  V11.B16, V17.B16, V11.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	// XOR-based case-insensitive compare
+	VEOR  V10.B16, V11.B16, V12.B16   // V12 = diff
+	VCMEQ V4.B16, V12.B16, V14.B16    // V14 = (diff == 0x20) ? 0xFF : 0
+	VORR  V4.B16, V10.B16, V16.B16    // V16 = haystack | 0x20
+	VADD  V2.B16, V16.B16, V16.B16    // V16 = (haystack | 0x20) + 159
+	WORD  $0x6e303470                 // VCMHI V16.B16, V3.B16, V16.B16 (is_letter)
+	VAND  V14.B16, V16.B16, V16.B16   // V16 = (diff==0x20) AND is_letter
+	VAND  V4.B16, V16.B16, V16.B16    // V16 = tolerable diff mask
+	VEOR  V16.B16, V12.B16, V10.B16   // V10 = diff XOR tolerable = real mismatch
+	WORD  $0x6e30a94a                 // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, raw1_scalar_nl_vloop
 	B     raw1_scalar_nl_verify_fail
@@ -3216,17 +3216,17 @@ raw1_scalar_nl_vtail:
 	VLD1  (R22), [V11.B16]
 	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
 
-	VADD  V2.B16, V10.B16, V16.B16
-	VADD  V2.B16, V11.B16, V17.B16
-	WORD  $0x6e303470               // VCMHI V16.B16, V3.B16, V16.B16
-	WORD  $0x6e313471               // VCMHI V17.B16, V3.B16, V17.B16
-	VAND  V4.B16, V16.B16, V16.B16
-	VAND  V4.B16, V17.B16, V17.B16
-	VORR  V10.B16, V16.B16, V10.B16
-	VORR  V11.B16, V17.B16, V11.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16
-	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	// XOR-based case-insensitive compare
+	VEOR  V10.B16, V11.B16, V12.B16   // V12 = diff
+	VCMEQ V4.B16, V12.B16, V14.B16    // V14 = (diff == 0x20) ? 0xFF : 0
+	VORR  V4.B16, V10.B16, V16.B16    // V16 = haystack | 0x20
+	VADD  V2.B16, V16.B16, V16.B16    // V16 = (haystack | 0x20) + 159
+	WORD  $0x6e303470                 // VCMHI V16.B16, V3.B16, V16.B16 (is_letter)
+	VAND  V14.B16, V16.B16, V16.B16   // V16 = (diff==0x20) AND is_letter
+	VAND  V4.B16, V16.B16, V16.B16    // V16 = tolerable diff mask
+	VEOR  V16.B16, V12.B16, V10.B16   // V10 = diff XOR tolerable = real mismatch
+	VAND  V13.B16, V10.B16, V10.B16   // Mask out bytes beyond needle
+	WORD  $0x6e30a94a                 // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, raw1_scalar_nl_verify_fail
 	B     raw1_found
@@ -3242,8 +3242,8 @@ raw1_scalar_nl_verify_fail:
 
 // ============================================================================
 // SIMD VERIFICATION (for 16/32/128-byte loop paths)
-// Dual-normalizes BOTH haystack AND needle (for raw needle input)
-// Uses V2=191, V3=26, V4=32 for letter detection
+// XOR-based case-insensitive compare
+// Uses V2=159, V3=26, V4=32 for letter detection
 // ============================================================================
 raw1_verify:
 	MOVD  R3, R19                 // R19 = remaining needle length
@@ -3258,17 +3258,17 @@ raw1_vloop:
 	VLD1.P 16(R22), [V11.B16]     // Load needle (raw)
 	MOVD   R23, R19
 
-	// Dual normalize: both haystack and needle
-	VADD  V2.B16, V10.B16, V16.B16  // V16 = h + 191 (=-65 unsigned)
-	VADD  V2.B16, V11.B16, V17.B16  // V17 = n + 191
-	WORD  $0x6e303470               // VCMHI V16.B16, V3.B16, V16.B16 (is h letter?)
-	WORD  $0x6e313471               // VCMHI V17.B16, V3.B16, V17.B16 (is n letter?)
-	VAND  V4.B16, V16.B16, V16.B16  // V16 = h_is_letter ? 0x20 : 0
-	VAND  V4.B16, V17.B16, V17.B16  // V17 = n_is_letter ? 0x20 : 0
-	VORR  V10.B16, V16.B16, V10.B16 // V10 = h | mask (normalized)
-	VORR  V11.B16, V17.B16, V11.B16 // V11 = n | mask (normalized)
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = diff (0 if equal)
-	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	// XOR-based case-insensitive compare (same pattern as fold1_verify)
+	// V2=159, V3=26, V4=32
+	VEOR  V10.B16, V11.B16, V12.B16   // V12 = diff
+	VCMEQ V4.B16, V12.B16, V14.B16    // V14 = (diff == 0x20) ? 0xFF : 0
+	VORR  V4.B16, V10.B16, V16.B16    // V16 = haystack | 0x20
+	VADD  V2.B16, V16.B16, V16.B16    // V16 = (haystack | 0x20) + 159
+	WORD  $0x6e303470                 // VCMHI V16.B16, V3.B16, V16.B16 (is_letter)
+	VAND  V14.B16, V16.B16, V16.B16   // V16 = (diff==0x20) AND is_letter
+	VAND  V4.B16, V16.B16, V16.B16    // V16 = tolerable diff mask
+	VEOR  V16.B16, V12.B16, V10.B16   // V10 = diff XOR tolerable = real mismatch
+	WORD  $0x6e30a94a                 // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, raw1_vloop
 	B     raw1_verify_fail
@@ -3281,18 +3281,17 @@ raw1_vtail:
 	VLD1  (R22), [V11.B16]
 	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
 
-	// Dual normalize
-	VADD  V2.B16, V10.B16, V16.B16
-	VADD  V2.B16, V11.B16, V17.B16
-	WORD  $0x6e303470               // VCMHI V16.B16, V3.B16, V16.B16
-	WORD  $0x6e313471               // VCMHI V17.B16, V3.B16, V17.B16
-	VAND  V4.B16, V16.B16, V16.B16
-	VAND  V4.B16, V17.B16, V17.B16
-	VORR  V10.B16, V16.B16, V10.B16
-	VORR  V11.B16, V17.B16, V11.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16 // Mask out bytes beyond needle
-	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	// XOR-based case-insensitive compare
+	VEOR  V10.B16, V11.B16, V12.B16   // V12 = diff
+	VCMEQ V4.B16, V12.B16, V14.B16    // V14 = (diff == 0x20) ? 0xFF : 0
+	VORR  V4.B16, V10.B16, V16.B16    // V16 = haystack | 0x20
+	VADD  V2.B16, V16.B16, V16.B16    // V16 = (haystack | 0x20) + 159
+	WORD  $0x6e303470                 // VCMHI V16.B16, V3.B16, V16.B16 (is_letter)
+	VAND  V14.B16, V16.B16, V16.B16   // V16 = (diff==0x20) AND is_letter
+	VAND  V4.B16, V16.B16, V16.B16    // V16 = tolerable diff mask
+	VEOR  V16.B16, V12.B16, V10.B16   // V10 = diff XOR tolerable = real mismatch
+	VAND  V13.B16, V10.B16, V10.B16   // Mask out bytes beyond needle
+	WORD  $0x6e30a94a                 // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, raw1_verify_fail
 	B     raw1_found
@@ -3550,9 +3549,9 @@ raw2_setup:
 	VMOV  R17, V5.D[0]
 	VMOV  R17, V5.D[1]
 
-	// Constants for dual-normalize verification
-	// V6 = 191 (-65 as unsigned), V7 = 26, V8 = 32 (0x20)
-	WORD  $0x4f05e7e6             // VMOVI $191, V6.B16
+	// Constants for verification (XOR-based, same as fold2)
+	// V6 = 159 (-97 as unsigned), V7 = 26, V8 = 32 (0x20)
+	WORD  $0x4f04e7e6             // VMOVI $159, V6.B16
 	WORD  $0x4f00e747             // VMOVI $26, V7.B16
 	WORD  $0x4f01e408             // VMOVI $32, V8.B16
 	MOVD  $tail_mask_table<>(SB), R24
@@ -3796,17 +3795,20 @@ raw2_scalar_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	// Dual normalize
-	VADD  V6.B16, V10.B16, V16.B16
-	VADD  V6.B16, V11.B16, V17.B16
-	WORD  $0x6e303470               // VCMHI V16.B16, V7.B16, V16.B16
-	WORD  $0x6e313471               // VCMHI V17.B16, V7.B16, V17.B16
-	VAND  V8.B16, V16.B16, V16.B16
-	VAND  V8.B16, V17.B16, V17.B16
-	VORR  V10.B16, V16.B16, V10.B16
-	VORR  V11.B16, V17.B16, V11.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	// XOR-based case-insensitive compare (same pattern as fold2_verify)
+	// 1. Compute diff = haystack XOR needle
+	// 2. Check if diff == 0x20 (case difference)
+	// 3. Check if haystack is a letter: (haystack | 0x20) - 97 < 26
+	// 4. Allow diff only if both conditions are true
+	VEOR  V10.B16, V11.B16, V12.B16   // V12 = diff
+	VCMEQ V8.B16, V12.B16, V14.B16    // V14 = (diff == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V16.B16    // V16 = haystack | 0x20
+	VADD  V6.B16, V16.B16, V16.B16    // V16 = (haystack | 0x20) + 159 (= -97)
+	WORD  $0x6e303470                 // VCMHI V16.B16, V7.B16, V16.B16 (is_letter)
+	VAND  V14.B16, V16.B16, V16.B16   // V16 = (diff==0x20) AND is_letter
+	VAND  V8.B16, V16.B16, V16.B16    // V16 = tolerable diff mask (0x20 or 0)
+	VEOR  V16.B16, V12.B16, V10.B16   // V10 = diff XOR tolerable = real mismatch
+	WORD  $0x6e30a94a                 // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, raw2_scalar_vloop
 	B     raw2_scalar_verify_fail
@@ -3819,17 +3821,17 @@ raw2_scalar_vtail:
 	VLD1  (R22), [V11.B16]
 	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
 
-	VADD  V6.B16, V10.B16, V16.B16
-	VADD  V6.B16, V11.B16, V17.B16
-	WORD  $0x6e303470               // VCMHI V16.B16, V7.B16, V16.B16
-	WORD  $0x6e313471               // VCMHI V17.B16, V7.B16, V17.B16
-	VAND  V8.B16, V16.B16, V16.B16
-	VAND  V8.B16, V17.B16, V17.B16
-	VORR  V10.B16, V16.B16, V10.B16
-	VORR  V11.B16, V17.B16, V11.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16
-	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	// XOR-based case-insensitive compare (same pattern as fold2_vtail)
+	VEOR  V10.B16, V11.B16, V12.B16   // V12 = diff
+	VCMEQ V8.B16, V12.B16, V14.B16    // V14 = (diff == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V16.B16    // V16 = haystack | 0x20
+	VADD  V6.B16, V16.B16, V16.B16    // V16 = (haystack | 0x20) + 159
+	WORD  $0x6e3034f0                 // VCMHI V16.B16, V7.B16, V16.B16 (is_letter)
+	VAND  V14.B16, V16.B16, V16.B16   // V16 = (diff==0x20) AND is_letter
+	VAND  V8.B16, V16.B16, V16.B16    // V16 = tolerable diff mask
+	VEOR  V16.B16, V12.B16, V10.B16   // V10 = diff XOR tolerable = real mismatch
+	VAND  V13.B16, V10.B16, V10.B16   // Mask out bytes beyond needle
+	WORD  $0x6e30a94a                 // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, raw2_scalar_verify_fail
 	B     raw2_found
@@ -3844,7 +3846,7 @@ raw2_scalar_verify_fail:
 	B     raw2_scalar_next
 
 // ============================================================================
-// SIMD VERIFICATION (dual-normalize)
+// SIMD VERIFICATION (XOR-based, same as fold2)
 // ============================================================================
 raw2_verify:
 	MOVD  R3, R19
@@ -3859,16 +3861,16 @@ raw2_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	VADD  V6.B16, V10.B16, V16.B16
-	VADD  V6.B16, V11.B16, V17.B16
-	WORD  $0x6e303470               // VCMHI V16.B16, V7.B16, V16.B16
-	WORD  $0x6e313471               // VCMHI V17.B16, V7.B16, V17.B16
-	VAND  V8.B16, V16.B16, V16.B16
-	VAND  V8.B16, V17.B16, V17.B16
-	VORR  V10.B16, V16.B16, V10.B16
-	VORR  V11.B16, V17.B16, V11.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	// XOR-based case-insensitive compare (same pattern as fold2_verify)
+	VEOR  V10.B16, V11.B16, V12.B16   // V12 = diff
+	VCMEQ V8.B16, V12.B16, V14.B16    // V14 = (diff == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V16.B16    // V16 = haystack | 0x20
+	VADD  V6.B16, V16.B16, V16.B16    // V16 = (haystack | 0x20) + 159
+	WORD  $0x6e3034f0                 // VCMHI V16.B16, V7.B16, V16.B16 (is_letter)
+	VAND  V14.B16, V16.B16, V16.B16   // V16 = (diff==0x20) AND is_letter
+	VAND  V8.B16, V16.B16, V16.B16    // V16 = tolerable diff mask
+	VEOR  V16.B16, V12.B16, V10.B16   // V10 = diff XOR tolerable = real mismatch
+	WORD  $0x6e30a94a                 // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, raw2_vloop
 	B     raw2_verify_fail
@@ -3881,17 +3883,17 @@ raw2_vtail:
 	VLD1  (R22), [V11.B16]
 	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
 
-	VADD  V6.B16, V10.B16, V16.B16
-	VADD  V6.B16, V11.B16, V17.B16
-	WORD  $0x6e303470               // VCMHI V16.B16, V7.B16, V16.B16
-	WORD  $0x6e313471               // VCMHI V17.B16, V7.B16, V17.B16
-	VAND  V8.B16, V16.B16, V16.B16
-	VAND  V8.B16, V17.B16, V17.B16
-	VORR  V10.B16, V16.B16, V10.B16
-	VORR  V11.B16, V17.B16, V11.B16
-	VEOR  V10.B16, V11.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16
-	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	// XOR-based case-insensitive compare (same pattern as fold2_vtail)
+	VEOR  V10.B16, V11.B16, V12.B16   // V12 = diff
+	VCMEQ V8.B16, V12.B16, V14.B16    // V14 = (diff == 0x20) ? 0xFF : 0
+	VORR  V8.B16, V10.B16, V16.B16    // V16 = haystack | 0x20
+	VADD  V6.B16, V16.B16, V16.B16    // V16 = (haystack | 0x20) + 159
+	WORD  $0x6e3034f0                 // VCMHI V16.B16, V7.B16, V16.B16 (is_letter)
+	VAND  V14.B16, V16.B16, V16.B16   // V16 = (diff==0x20) AND is_letter
+	VAND  V8.B16, V16.B16, V16.B16    // V16 = tolerable diff mask
+	VEOR  V16.B16, V12.B16, V10.B16   // V10 = diff XOR tolerable = real mismatch
+	VAND  V13.B16, V10.B16, V10.B16   // Mask out bytes beyond needle
+	WORD  $0x6e30a94a                 // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, raw2_verify_fail
 	B     raw2_found
