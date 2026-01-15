@@ -1519,8 +1519,7 @@ fold1_scalar:
 	BGT   fold1_scalar_next
 
 	ADD   R0, R16, R8
-	MOVD  $0x200, R14           // 0x200 = scalar path marker
-	B     fold1_verify
+	B     fold1_verify_scalar
 
 fold1_scalar_next:
 	ADD   $1, R10
@@ -1587,8 +1586,7 @@ fold1_scalar_nl:
 	BGT   fold1_scalar_nl_next
 
 	ADD   R0, R16, R8
-	MOVD  $0x200, R14           // 0x200 = scalar path marker
-	B     fold1_verify
+	B     fold1_verify_scalar_nl
 
 fold1_scalar_nl_next:
 	ADD   $1, R10
@@ -1597,7 +1595,124 @@ fold1_scalar_nl_next:
 	B     fold1_not_found
 
 // ============================================================================
-// VECTORIZED VERIFICATION
+// SCALAR VERIFICATION (separate paths to avoid syndrome-clearing logic)
+// ============================================================================
+fold1_verify_scalar:
+	MOVD  R3, R19                 // R19 = remaining needle length
+	MOVD  R8, R21                 // R21 = haystack candidate ptr
+	MOVD  R2, R22                 // R22 = needle ptr
+
+fold1_scalar_vloop:
+	SUBS  $16, R19, R23
+	BLT   fold1_scalar_vtail
+
+	VLD1.P 16(R21), [V10.B16]
+	VLD1.P 16(R22), [V11.B16]
+	MOVD   R23, R19
+
+	VEOR  V10.B16, V11.B16, V12.B16
+	VCMEQ V8.B16, V12.B16, V14.B16
+	VORR  V8.B16, V10.B16, V13.B16
+	VADD  V4.B16, V13.B16, V13.B16
+	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16
+	VAND  V14.B16, V13.B16, V13.B16
+	VAND  V8.B16, V13.B16, V13.B16
+	VEOR  V13.B16, V12.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBZW  R23, fold1_scalar_vloop
+	B     fold1_scalar_verify_fail
+
+fold1_scalar_vtail:
+	CMP   $1, R19
+	BLT   fold1_found
+
+	VLD1  (R21), [V10.B16]
+	VLD1  (R22), [V11.B16]
+	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
+
+	VEOR  V10.B16, V11.B16, V12.B16
+	VCMEQ V8.B16, V12.B16, V14.B16
+	VORR  V8.B16, V10.B16, V15.B16
+	VADD  V4.B16, V15.B16, V15.B16
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16
+	VAND  V14.B16, V15.B16, V15.B16
+	VAND  V8.B16, V15.B16, V15.B16
+	VEOR  V15.B16, V12.B16, V10.B16
+	VAND  V13.B16, V10.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBNZW R23, fold1_scalar_verify_fail
+	B     fold1_found
+
+fold1_scalar_verify_fail:
+	ADD   $1, R25, R25
+	SUB   R11, R10, R17
+	LSR   $3, R17, R17
+	ADD   $32, R17, R17
+	CMP   R17, R25
+	BGT   fold1_exceeded
+	B     fold1_scalar_next
+
+fold1_verify_scalar_nl:
+	MOVD  R3, R19
+	MOVD  R8, R21
+	MOVD  R2, R22
+
+fold1_scalar_nl_vloop:
+	SUBS  $16, R19, R23
+	BLT   fold1_scalar_nl_vtail
+
+	VLD1.P 16(R21), [V10.B16]
+	VLD1.P 16(R22), [V11.B16]
+	MOVD   R23, R19
+
+	VEOR  V10.B16, V11.B16, V12.B16
+	VCMEQ V8.B16, V12.B16, V14.B16
+	VORR  V8.B16, V10.B16, V13.B16
+	VADD  V4.B16, V13.B16, V13.B16
+	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16
+	VAND  V14.B16, V13.B16, V13.B16
+	VAND  V8.B16, V13.B16, V13.B16
+	VEOR  V13.B16, V12.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBZW  R23, fold1_scalar_nl_vloop
+	B     fold1_scalar_nl_verify_fail
+
+fold1_scalar_nl_vtail:
+	CMP   $1, R19
+	BLT   fold1_found
+
+	VLD1  (R21), [V10.B16]
+	VLD1  (R22), [V11.B16]
+	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
+
+	VEOR  V10.B16, V11.B16, V12.B16
+	VCMEQ V8.B16, V12.B16, V14.B16
+	VORR  V8.B16, V10.B16, V15.B16
+	VADD  V4.B16, V15.B16, V15.B16
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16
+	VAND  V14.B16, V15.B16, V15.B16
+	VAND  V8.B16, V15.B16, V15.B16
+	VEOR  V15.B16, V12.B16, V10.B16
+	VAND  V13.B16, V10.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBNZW R23, fold1_scalar_nl_verify_fail
+	B     fold1_found
+
+fold1_scalar_nl_verify_fail:
+	ADD   $1, R25, R25
+	SUB   R11, R10, R17
+	LSR   $3, R17, R17
+	ADD   $32, R17, R17
+	CMP   R17, R25
+	BGT   fold1_exceeded
+	B     fold1_scalar_nl_next
+
+// ============================================================================
+// SIMD VERIFICATION (for 16/32/128-byte loop paths)
 // ============================================================================
 fold1_verify:
 	MOVD  R3, R19                 // R19 = remaining needle length
@@ -1658,20 +1773,11 @@ fold1_verify_fail:
 	BGT   fold1_exceeded
 
 	// Clear bit and continue - use R14 to determine which loop
-	CMP   $0x200, R14
-	BEQ   fold1_scalar_fail       // Scalar path: just advance to next position
 	CMP   $0x100, R14
 	BEQ   fold1_clear16_from_verify
 	CMP   $64, R14
 	BLT   fold1_clear128_from_verify
 	B     fold1_clear32_from_verify
-
-fold1_scalar_fail:
-	// Scalar path failed verification - advance to next position
-	ADD   $1, R10
-	SUB   $1, R12
-	CBZ   R26, fold1_scalar_nl_entry  // Non-letter path
-	B     fold1_scalar_entry           // Letter path
 
 fold1_clear16_from_verify:
 	ADD   $1, R15, R17
@@ -3432,8 +3538,7 @@ raw1_scalar:
 	BGT   raw1_scalar_next
 
 	ADD   R0, R16, R8
-	MOVD  $0x200, R14         // 0x200 = scalar path marker
-	B     raw1_verify
+	B     raw1_verify_scalar
 
 raw1_scalar_next:
 	ADD   $1, R10
@@ -3500,8 +3605,7 @@ raw1_scalar_nl:
 	BGT   raw1_scalar_nl_next
 
 	ADD   R0, R16, R8
-	MOVD  $0x200, R14         // 0x200 = scalar path marker
-	B     raw1_verify
+	B     raw1_verify_scalar_nl
 
 raw1_scalar_nl_next:
 	ADD   $1, R10
@@ -3510,8 +3614,130 @@ raw1_scalar_nl_next:
 	B     raw1_not_found
 
 // ============================================================================
-// DUAL-NORMALIZE VERIFICATION
-// Normalizes BOTH haystack AND needle (for raw needle input)
+// SCALAR VERIFICATION (separate paths to avoid syndrome-clearing logic)
+// Dual-normalizes BOTH haystack AND needle (for raw needle input)
+// ============================================================================
+raw1_verify_scalar:
+	MOVD  R3, R19                 // R19 = remaining needle length
+	MOVD  R8, R21                 // R21 = haystack candidate ptr
+	MOVD  R2, R22                 // R22 = needle ptr
+
+raw1_scalar_vloop:
+	SUBS  $16, R19, R23
+	BLT   raw1_scalar_vtail
+
+	VLD1.P 16(R21), [V10.B16]
+	VLD1.P 16(R22), [V11.B16]
+	MOVD   R23, R19
+
+	VADD  V2.B16, V10.B16, V16.B16
+	VADD  V2.B16, V11.B16, V17.B16
+	WORD  $0x6e303470               // VCMHI V16.B16, V3.B16, V16.B16
+	WORD  $0x6e313471               // VCMHI V17.B16, V3.B16, V17.B16
+	VAND  V4.B16, V16.B16, V16.B16
+	VAND  V4.B16, V17.B16, V17.B16
+	VORR  V10.B16, V16.B16, V10.B16
+	VORR  V11.B16, V17.B16, V11.B16
+	VEOR  V10.B16, V11.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBZW  R23, raw1_scalar_vloop
+	B     raw1_scalar_verify_fail
+
+raw1_scalar_vtail:
+	CMP   $1, R19
+	BLT   raw1_found
+
+	VLD1  (R21), [V10.B16]
+	VLD1  (R22), [V11.B16]
+	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
+
+	VADD  V2.B16, V10.B16, V16.B16
+	VADD  V2.B16, V11.B16, V17.B16
+	WORD  $0x6e303470               // VCMHI V16.B16, V3.B16, V16.B16
+	WORD  $0x6e313471               // VCMHI V17.B16, V3.B16, V17.B16
+	VAND  V4.B16, V16.B16, V16.B16
+	VAND  V4.B16, V17.B16, V17.B16
+	VORR  V10.B16, V16.B16, V10.B16
+	VORR  V11.B16, V17.B16, V11.B16
+	VEOR  V10.B16, V11.B16, V10.B16
+	VAND  V13.B16, V10.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBNZW R23, raw1_scalar_verify_fail
+	B     raw1_found
+
+raw1_scalar_verify_fail:
+	ADD   $1, R25, R25
+	SUB   R11, R10, R17
+	LSR   $3, R17, R17
+	ADD   $32, R17, R17
+	CMP   R17, R25
+	BGT   raw1_exceeded
+	B     raw1_scalar_next
+
+raw1_verify_scalar_nl:
+	MOVD  R3, R19
+	MOVD  R8, R21
+	MOVD  R2, R22
+
+raw1_scalar_nl_vloop:
+	SUBS  $16, R19, R23
+	BLT   raw1_scalar_nl_vtail
+
+	VLD1.P 16(R21), [V10.B16]
+	VLD1.P 16(R22), [V11.B16]
+	MOVD   R23, R19
+
+	VADD  V2.B16, V10.B16, V16.B16
+	VADD  V2.B16, V11.B16, V17.B16
+	WORD  $0x6e303470               // VCMHI V16.B16, V3.B16, V16.B16
+	WORD  $0x6e313471               // VCMHI V17.B16, V3.B16, V17.B16
+	VAND  V4.B16, V16.B16, V16.B16
+	VAND  V4.B16, V17.B16, V17.B16
+	VORR  V10.B16, V16.B16, V10.B16
+	VORR  V11.B16, V17.B16, V11.B16
+	VEOR  V10.B16, V11.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBZW  R23, raw1_scalar_nl_vloop
+	B     raw1_scalar_nl_verify_fail
+
+raw1_scalar_nl_vtail:
+	CMP   $1, R19
+	BLT   raw1_found
+
+	VLD1  (R21), [V10.B16]
+	VLD1  (R22), [V11.B16]
+	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
+
+	VADD  V2.B16, V10.B16, V16.B16
+	VADD  V2.B16, V11.B16, V17.B16
+	WORD  $0x6e303470               // VCMHI V16.B16, V3.B16, V16.B16
+	WORD  $0x6e313471               // VCMHI V17.B16, V3.B16, V17.B16
+	VAND  V4.B16, V16.B16, V16.B16
+	VAND  V4.B16, V17.B16, V17.B16
+	VORR  V10.B16, V16.B16, V10.B16
+	VORR  V11.B16, V17.B16, V11.B16
+	VEOR  V10.B16, V11.B16, V10.B16
+	VAND  V13.B16, V10.B16, V10.B16
+	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
+	FMOVS F10, R23
+	CBNZW R23, raw1_scalar_nl_verify_fail
+	B     raw1_found
+
+raw1_scalar_nl_verify_fail:
+	ADD   $1, R25, R25
+	SUB   R11, R10, R17
+	LSR   $3, R17, R17
+	ADD   $32, R17, R17
+	CMP   R17, R25
+	BGT   raw1_exceeded
+	B     raw1_scalar_nl_next
+
+// ============================================================================
+// SIMD VERIFICATION (for 16/32/128-byte loop paths)
+// Dual-normalizes BOTH haystack AND needle (for raw needle input)
 // Uses V2=191, V3=26, V4=32 for letter detection
 // ============================================================================
 raw1_verify:
@@ -3574,21 +3800,12 @@ raw1_verify_fail:
 	CMP   R17, R25
 	BGT   raw1_exceeded
 
-	// Clear bit and continue
-	CMP   $0x200, R14
-	BEQ   raw1_scalar_fail     // Scalar path: just advance to next position
+	// Clear bit and continue - use R14 to determine which loop
 	CMP   $0x100, R14
 	BEQ   raw1_clear16_from_verify
 	CMP   $64, R14
 	BLT   raw1_clear128_from_verify
 	B     raw1_clear32_from_verify
-
-raw1_scalar_fail:
-	// Scalar path failed verification - advance to next position
-	ADD   $1, R10
-	SUB   $1, R12
-	CBZ   R26, raw1_scalar_nl_entry  // Non-letter path
-	B     raw1_scalar_entry           // Letter path
 
 raw1_clear16_from_verify:
 	ADD   $1, R15, R17
