@@ -31,6 +31,7 @@ func resultPosition(r uint64) int {
 
 // IndexFoldModular performs case-insensitive substring search using staged kernels.
 // Uses first byte for stage 1, then middle/last byte for stage 2 if needed.
+// Uses Raw variants that fold needle on-the-fly (no normalizeASCII overhead).
 func IndexFoldModular(haystack, needle string) int {
 	n := len(needle)
 	if n == 0 {
@@ -40,11 +41,9 @@ func IndexFoldModular(haystack, needle string) int {
 		return -1
 	}
 
-	normNeedle := normalizeASCII(needle)
-
-	// Stage 1: 1-byte filter on first byte
+	// Stage 1: 1-byte filter on first byte (Raw: folds needle on-the-fly)
 	off1 := 0
-	result := indexFold1Byte(haystack, normNeedle, off1)
+	result := indexFold1ByteRaw(haystack, needle, off1)
 
 	if !resultExceeded(result) {
 		return resultPosition(result)
@@ -60,7 +59,7 @@ func IndexFoldModular(haystack, needle string) int {
 		haystack = haystack[resumePos:]
 	}
 
-	result = indexFold2Byte(haystack, normNeedle, off1, off2-off1)
+	result = indexFold2ByteRaw(haystack, needle, off1, off2-off1)
 
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
@@ -70,14 +69,14 @@ func IndexFoldModular(haystack, needle string) int {
 		return -1
 	}
 
-	// Stage 3: Rabin-Karp fallback
+	// Stage 3: Rabin-Karp fallback (folds both strings internally)
 	resumePos2 := resultPosition(result)
 	if resumePos2 > 0 {
 		haystack = haystack[resumePos2:]
 		resumePos += resumePos2
 	}
 
-	pos := indexFoldRabinKarp(haystack, normNeedle)
+	pos := indexFoldRabinKarp(haystack, needle)
 	if pos >= 0 {
 		return pos + resumePos
 	}

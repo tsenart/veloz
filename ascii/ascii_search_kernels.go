@@ -15,3 +15,9 @@ func indexFold2Byte(haystack string, needle string, off1 int, off2Delta int) uin
 
 //go:noescape
 func indexExact2Byte(haystack string, needle string, off1 int, off2Delta int) uint64
+
+//go:noescape
+func indexFold1ByteRaw(haystack string, needle string, off1 int) uint64
+
+//go:noescape
+func indexFold2ByteRaw(haystack string, needle string, off1 int, off2Delta int) uint64
