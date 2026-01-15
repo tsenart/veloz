@@ -346,39 +346,39 @@ uint64_t index_exact_1byte(
     const int64_t search_len = haystack_len - needle_len + 1;
     const uint8x16_t v_target = vdupq_n_u8(rare1);
     
-    unsigned char *search_ptr = haystack + off1;
-    unsigned char *search_start = search_ptr;
-    unsigned char *data_end = haystack + haystack_len;
+    unsigned char *ptr = haystack + off1;
     int64_t remaining = search_len;
     int64_t failures = 0;
     
-    // 32-byte loop
-    // Threshold: 16 failures warmup + 1 per 16 bytes scanned
+    // 32-byte loop - tight scan, threshold checked only on candidates
     while (remaining >= 32) {
-        int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = 16 + (bytes_scanned >> 4);
-        
-        uint8x16_t d0 = vld1q_u8(search_ptr);
-        uint8x16_t d1 = vld1q_u8(search_ptr + 16);
-        search_ptr += 32;
+        uint8x16x2_t data = vld1q_u8_x2(ptr);
+        ptr += 32;
         remaining -= 32;
         
-        uint8x16_t m0 = vceqq_u8(d0, v_target);
-        uint8x16_t m1 = vceqq_u8(d1, v_target);
-        
+        uint8x16_t m0 = vceqq_u8(data.val[0], v_target);
+        uint8x16_t m1 = vceqq_u8(data.val[1], v_target);
         uint8x16_t any = vorrq_u8(m0, m1);
-        if (any_nonzero(any) == 0) continue;
+        
+        // Fast path: no candidates
+        uint64x2_t v64 = vreinterpretq_u64_u8(any);
+        uint64x2_t folded = vpaddq_u64(v64, v64);
+        if (vgetq_lane_u64(folded, 0) == 0) continue;
+        
+        // Slow path: process candidates, compute threshold
+        int64_t bytes_scanned = search_len - remaining;
+        int64_t threshold = 16 + (bytes_scanned >> 4);
         
         uint8x8_t n0 = vshrn_n_u16(vreinterpretq_u16_u8(m0), 4);
         uint64_t syn0 = vget_lane_u64(vreinterpret_u64_u8(n0), 0);
         while (syn0) {
             int bit_pos = __builtin_ctzll(syn0);
             int byte_pos = bit_pos >> 2;
-            int64_t pos = (search_ptr - 32 - haystack) + byte_pos - off1;
+            int64_t pos = (ptr - 32 - haystack) + byte_pos - off1;
             
             if (pos >= 0 && pos < search_len) {
                 unsigned char *candidate = haystack + pos;
-                int64_t cand_remaining = data_end - candidate;
+                int64_t cand_remaining = haystack_len - pos;
                 if (verify_exact(candidate, needle, needle_len, cand_remaining)) {
                     return RESULT_FOUND(pos);
                 }
@@ -396,11 +396,11 @@ uint64_t index_exact_1byte(
         while (syn1) {
             int bit_pos = __builtin_ctzll(syn1);
             int byte_pos = bit_pos >> 2;
-            int64_t pos = (search_ptr - 16 - haystack) + byte_pos - off1;
+            int64_t pos = (ptr - 16 - haystack) + byte_pos - off1;
             
             if (pos >= 0 && pos < search_len) {
                 unsigned char *candidate = haystack + pos;
-                int64_t cand_remaining = data_end - candidate;
+                int64_t cand_remaining = haystack_len - pos;
                 if (verify_exact(candidate, needle, needle_len, cand_remaining)) {
                     return RESULT_FOUND(pos);
                 }
@@ -414,27 +414,29 @@ uint64_t index_exact_1byte(
         }
     }
     
-    // 16-byte loop
+    // 16-byte loop for remainder
     while (remaining >= 16) {
-        int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = 16 + (bytes_scanned >> 4);
-        
-        uint8x16_t d = vld1q_u8(search_ptr);
-        search_ptr += 16;
+        uint8x16_t d = vld1q_u8(ptr);
+        ptr += 16;
         remaining -= 16;
         
         uint8x16_t m = vceqq_u8(d, v_target);
         uint8x8_t n = vshrn_n_u16(vreinterpretq_u16_u8(m), 4);
         uint64_t syn = vget_lane_u64(vreinterpret_u64_u8(n), 0);
         
+        if (syn == 0) continue;
+        
+        int64_t bytes_scanned = search_len - remaining;
+        int64_t threshold = 16 + (bytes_scanned >> 4);
+        
         while (syn) {
             int bit_pos = __builtin_ctzll(syn);
             int byte_pos = bit_pos >> 2;
-            int64_t pos = (search_ptr - 16 - haystack) + byte_pos - off1;
+            int64_t pos = (ptr - 16 - haystack) + byte_pos - off1;
             
             if (pos >= 0 && pos < search_len) {
                 unsigned char *candidate = haystack + pos;
-                int64_t cand_remaining = data_end - candidate;
+                int64_t cand_remaining = haystack_len - pos;
                 if (verify_exact(candidate, needle, needle_len, cand_remaining)) {
                     return RESULT_FOUND(pos);
                 }
@@ -448,24 +450,24 @@ uint64_t index_exact_1byte(
         }
     }
     
-    // Scalar loop
+    // Scalar loop for final bytes
     while (remaining > 0) {
-        int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = 16 + (bytes_scanned >> 4);
-        int64_t pos = search_ptr - haystack - off1;
+        int64_t pos = ptr - haystack - off1;
         
-        if (*search_ptr == rare1 && pos >= 0 && pos < search_len) {
+        if (*ptr == rare1 && pos >= 0 && pos < search_len) {
             unsigned char *candidate = haystack + pos;
-            int64_t cand_remaining = data_end - candidate;
+            int64_t cand_remaining = haystack_len - pos;
             if (verify_exact(candidate, needle, needle_len, cand_remaining)) {
                 return RESULT_FOUND(pos);
             }
+            int64_t bytes_scanned = search_len - remaining;
+            int64_t threshold = 16 + (bytes_scanned >> 4);
             failures++;
             if (failures > threshold) {
                 return RESULT_EXCEEDED(pos + 1);
             }
         }
-        search_ptr++;
+        ptr++;
         remaining--;
     }
     

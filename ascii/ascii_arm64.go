@@ -2,8 +2,6 @@
 
 package ascii
 
-
-
 // CharSet represents a precomputed character set for fast IndexAny lookups.
 // Build once with MakeCharSet, then reuse with IndexAnyCharSet.
 type CharSet struct {

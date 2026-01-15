@@ -924,17 +924,17 @@ func TestSearchNeedle(t *testing.T) {
 		// Bug 1: Multiple matches in same 16-byte chunk where first is false positive
 		// Tests nibble clearing logic - if we clear only 1 bit instead of 4-bit nibble,
 		// we'd get stuck in infinite loop or miss the real match
-		{"xQxZxQxZxQxZQZab", "QZab", 12}, // Q and Z are rare, multiple false positives before real match
-		{"aQaZaQaZaQaZQZxy", "QZxy", 12}, // Same pattern, different ending
+		{"xQxZxQxZxQxZQZab", "QZab", 12},           // Q and Z are rare, multiple false positives before real match
+		{"aQaZaQaZaQaZQZxy", "QZxy", 12},           // Same pattern, different ending
 		{"QxZxQxZxQxZxQxZxQZmatch", "QZmatch", 16}, // Match starts exactly at position 16
 
 		// Bug 2: Match in tail region (last <16 bytes after main SIMD loop)
 		// Tests tail masking - if we mask chunks before comparison, non-zero rare bytes
 		// compared against masked zeros would never match
-		{strings.Repeat("x", 20) + "needle", "needle", 20},           // Match in tail, haystack > 16
-		{strings.Repeat("x", 17) + "QZ", "QZ", 17},                   // Very short tail (2 bytes)
-		{strings.Repeat("x", 25) + "abc", "abc", 25},                 // Match in tail after 1 full SIMD iteration
-		{strings.Repeat("y", 31) + "z", "z", 31},                     // Single char match at very end of tail
+		{strings.Repeat("x", 20) + "needle", "needle", 20},                   // Match in tail, haystack > 16
+		{strings.Repeat("x", 17) + "QZ", "QZ", 17},                           // Very short tail (2 bytes)
+		{strings.Repeat("x", 25) + "abc", "abc", 25},                         // Match in tail after 1 full SIMD iteration
+		{strings.Repeat("y", 31) + "z", "z", 31},                             // Single char match at very end of tail
 		{strings.Repeat("a", 16) + strings.Repeat("b", 10) + "QZ", "QZ", 26}, // Tail with rare bytes
 
 		// Combined: multiple candidates AND in tail region
@@ -1054,14 +1054,14 @@ func TestSelectRarePair(t *testing.T) {
 		expectRare1 byte
 		expectRare2 byte
 	}{
-		{"the", 'T', 'H'},         // All common, picks first two
-		{"quick", 'Q', 'K'},       // Q is very rare
-		{"xylophone", 'X', 'Y'},   // X and Y are rare
-		{"zzz", 'Z', 'Z'},         // Z is very rare
-		{"aaa", 'A', 'A'},         // All same
-		{"ab", 'B', 'A'},          // B rarer than A (or vice versa based on distance)
-		{`"num"`, '"', 'u'},       // Must pick different chars, not both quotes
-		{`""`, '"', '"'},          // All same char, fallback to first/last
+		{"the", 'T', 'H'},       // All common, picks first two
+		{"quick", 'Q', 'K'},     // Q is very rare
+		{"xylophone", 'X', 'Y'}, // X and Y are rare
+		{"zzz", 'Z', 'Z'},       // Z is very rare
+		{"aaa", 'A', 'A'},       // All same
+		{"ab", 'B', 'A'},        // B rarer than A (or vice versa based on distance)
+		{`"num"`, '"', 'u'},     // Must pick different chars, not both quotes
+		{`""`, '"', '"'},        // All same char, fallback to first/last
 	}
 
 	for _, tt := range tests {

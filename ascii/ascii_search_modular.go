@@ -2,6 +2,8 @@
 
 package ascii
 
+import "strings"
+
 // Modular Go-driven substring search using staged NEON kernels.
 // Architecture:
 //   Stage 1: 1-byte filter (rare byte at off1)
@@ -121,14 +123,21 @@ func IndexExactModular(haystack, needle string) int {
 		return -1
 	}
 
-	// Stage 3: Rabin-Karp fallback
+	// Stage 3: Fallback
 	resumePos2 := resultPosition(result)
 	if resumePos2 > 0 {
 		haystack = haystack[resumePos2:]
 		resumePos += resumePos2
 	}
 
-	pos := indexExactRabinKarp(haystack, needle)
+	// For short needles, use stdlib's brute-force (faster than RK)
+	// For long needles, use SIMD Rabin-Karp
+	var pos int
+	if n <= 8 {
+		pos = strings.Index(haystack, needle)
+	} else {
+		pos = indexExactRabinKarp(haystack, needle)
+	}
 	if pos >= 0 {
 		return pos + resumePos
 	}

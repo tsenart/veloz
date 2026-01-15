@@ -602,7 +602,7 @@ func (bs *BooleanSearch) buildVerifyTables() {
 				v = c
 				m = 0xFF
 			} else if isAlpha(c) {
-				v = c &^ 0x20  // uppercase
+				v = c &^ 0x20   // uppercase
 				m = 0xFF ^ 0x20 // mask out bit 5
 			} else {
 				v = c

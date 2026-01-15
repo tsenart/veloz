@@ -183,9 +183,9 @@ func BenchmarkThresholdSweep(b *testing.B) {
 func BenchmarkCutoverContinue(b *testing.B) {
 	// Large haystack with rare characters (no false positives) for first ~50KB
 	// Then dense false positives that trigger cutover, followed by match
-	prefix := strings.Repeat("x", 50000)  // 50KB of no-match chars
-	falsePos := strings.Repeat("h", 500)  // 500 'h' chars = false positives for 'H'
-	suffix := "HHHHHHHH0"                 // The actual match
+	prefix := strings.Repeat("x", 50000) // 50KB of no-match chars
+	falsePos := strings.Repeat("h", 500) // 500 'h' chars = false positives for 'H'
+	suffix := "HHHHHHHH0"                // The actual match
 	haystack := prefix + falsePos + suffix
 
 	needle := NewSearcher("HHHHHHHH0", false)
