@@ -48,6 +48,9 @@ TEXT ·indexExact1Byte(SB), NOSPLIT, $0-48
 	MOVD  SYNDROME_MAGIC, R14
 	VMOV  R14, V5.S4
 
+	// Tail mask table base (used for indexed loads in verify tails)
+	MOVD  $tail_mask_table<>(SB), R24
+
 	CMP   $64, R10
 	BLT   loop32_exact1_entry
 
@@ -134,14 +137,12 @@ process_match64_exact1:
 verify64_exact1:
 	CMP    $16, R22
 	BLT    verify_tail64_exact1
-	VLD1   (R20), [V10.B16]
-	VLD1   (R21), [V11.B16]
+	VLD1.P 16(R20), [V10.B16]
+	VLD1.P 16(R21), [V11.B16]
 	VEOR   V10.B16, V11.B16, V12.B16
 	WORD   $0x6e30a98c
 	FMOVS  F12, R6
 	CBNZW  R6, fail64_exact1
-	ADD    $16, R20
-	ADD    $16, R21
 	SUBS   $16, R22, R22
 	BGT    verify64_exact1
 	MOVD   R19, R17
@@ -153,9 +154,7 @@ verify_tail64_exact1:
 	VLD1   (R20), [V10.B16]
 	VLD1   (R21), [V11.B16]
 	VEOR   V10.B16, V11.B16, V12.B16
-	MOVD   $tail_mask_table<>(SB), R6
-	ADD    R22<<4, R6, R6
-	VLD1   (R6), [V13.B16]
+	WORD   $0x3cf67b0d               // LDR Q13, [R24, R22, LSL #4]
 	VAND   V13.B16, V12.B16, V12.B16
 	WORD   $0x6e30a98c
 	FMOVS  F12, R6
@@ -210,21 +209,19 @@ loop32_exact1:
 	SUBS   $32, R10, R10
 	VCMEQ  V0.B16, V1.B16, V3.B16
 	VCMEQ  V0.B16, V2.B16, V4.B16
-	BLS    end32_exact1
 	VORR   V4.B16, V3.B16, V6.B16
 	VADDP  V6.D2, V6.D2, V6.D2
 	VMOV   V6.D[0], R15
-	CBNZ   R15, end32_exact1
+	BLS    end32_exact1             // Last block - check for match
+	CBNZ   R15, end32_match_exact1  // Match found mid-loop
 	CMP    $32, R10
 	BGE    loop32_exact1
-	// R10 < 32 and no match, fall through to end32_exact1
+	B      loop16_exact1            // No match, not enough for another 32B
 
 end32_exact1:
-	VORR  V4.B16, V3.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R15
-	CBZ   R15, loop16_exact1
+	CBZ   R15, loop16_exact1        // No match in final block
 
+end32_match_exact1:
 	// Extract syndromes
 	VAND  V5.B16, V3.B16, V3.B16
 	VAND  V5.B16, V4.B16, V4.B16
@@ -233,7 +230,6 @@ end32_exact1:
 	VMOV  V6.D[0], R15
 
 process_syndrome32_exact1:
-	CBZ   R15, loop16_exact1
 
 	// Find position
 	RBIT  R15, R16
@@ -257,14 +253,12 @@ process_syndrome32_exact1:
 verify32_exact1:
 	CMP   $16, R21
 	BLT   verify_tail32_exact1
-	VLD1  (R19), [V10.B16]
-	VLD1  (R20), [V11.B16]
+	VLD1.P 16(R19), [V10.B16]
+	VLD1.P 16(R20), [V11.B16]
 	VEOR  V10.B16, V11.B16, V12.B16
 	WORD  $0x6e30a98c              // VUMAXV V12.B16, V12
 	FMOVS F12, R6
 	CBNZW R6, fail32_exact1
-	ADD   $16, R19
-	ADD   $16, R20
 	SUBS  $16, R21, R21
 	BGT   verify32_exact1
 	B     found_exact1
@@ -275,9 +269,7 @@ verify_tail32_exact1:
 	VLD1  (R19), [V10.B16]
 	VLD1  (R20), [V11.B16]
 	VEOR  V10.B16, V11.B16, V12.B16
-	MOVD  $tail_mask_table<>(SB), R6
-	ADD   R21<<4, R6, R6
-	VLD1  (R6), [V13.B16]
+	WORD  $0x3cf57b0d               // LDR Q13, [R24, R21, LSL #4]
 	VAND  V13.B16, V12.B16, V12.B16
 	WORD  $0x6e30a98c
 	FMOVS F12, R6
@@ -341,14 +333,12 @@ process16_exact1:
 verify16_exact1:
 	CMP   $16, R21
 	BLT   verify_tail16_exact1
-	VLD1  (R19), [V10.B16]
-	VLD1  (R20), [V11.B16]
+	VLD1.P 16(R19), [V10.B16]
+	VLD1.P 16(R20), [V11.B16]
 	VEOR  V10.B16, V11.B16, V12.B16
 	WORD  $0x6e30a98c
 	FMOVS F12, R6
 	CBNZW R6, fail16_exact1
-	ADD   $16, R19
-	ADD   $16, R20
 	SUBS  $16, R21, R21
 	BGT   verify16_exact1
 	B     found_exact1
@@ -359,9 +349,7 @@ verify_tail16_exact1:
 	VLD1  (R19), [V10.B16]
 	VLD1  (R20), [V11.B16]
 	VEOR  V10.B16, V11.B16, V12.B16
-	MOVD  $tail_mask_table<>(SB), R6
-	ADD   R21<<4, R6, R6
-	VLD1  (R6), [V13.B16]
+	WORD  $0x3cf57b0d               // LDR Q13, [R24, R21, LSL #4]
 	VAND  V13.B16, V12.B16, V12.B16
 	WORD  $0x6e30a98c
 	FMOVS F12, R6
@@ -483,6 +471,9 @@ TEXT ·indexExact2Byte(SB), NOSPLIT, $0-56
 	MOVD  SYNDROME_MAGIC, R23
 	VMOV  R23, V5.S4
 
+	// Tail mask table base
+	MOVD  $tail_mask_table<>(SB), R24
+
 	CMP   $64, R10
 	BLT   loop16_exact2
 
@@ -575,14 +566,12 @@ process_match64_exact2:
 verify64_exact2:
 	CMP   $16, R22
 	BLT   verify_tail64_exact2
-	VLD1  (R20), [V10.B16]
-	VLD1  (R21), [V11.B16]
+	VLD1.P 16(R20), [V10.B16]
+	VLD1.P 16(R21), [V11.B16]
 	VEOR  V10.B16, V11.B16, V12.B16
 	WORD  $0x6e30a98c
 	FMOVS F12, R6
 	CBNZW R6, fail64_exact2
-	ADD   $16, R20
-	ADD   $16, R21
 	SUBS  $16, R22, R22
 	BGT   verify64_exact2
 	MOVD  R19, R0
@@ -595,9 +584,7 @@ verify_tail64_exact2:
 	VLD1  (R20), [V10.B16]
 	VLD1  (R21), [V11.B16]
 	VEOR  V10.B16, V11.B16, V12.B16
-	MOVD  $tail_mask_table<>(SB), R6
-	ADD   R22<<4, R6, R6
-	VLD1  (R6), [V13.B16]
+	WORD  $0x3cf67b0d               // LDR Q13, [R24, R22, LSL #4]
 	VAND  V13.B16, V12.B16, V12.B16
 	WORD  $0x6e30a98c
 	FMOVS F12, R6
@@ -677,14 +664,12 @@ process16_exact2:
 verify16_exact2:
 	CMP   $16, R22
 	BLT   verify_tail16_exact2
-	VLD1  (R20), [V10.B16]
-	VLD1  (R21), [V11.B16]
+	VLD1.P 16(R20), [V10.B16]
+	VLD1.P 16(R21), [V11.B16]
 	VEOR  V10.B16, V11.B16, V12.B16
 	WORD  $0x6e30a98c
 	FMOVS F12, R6
 	CBNZW R6, fail16_exact2
-	ADD   $16, R20
-	ADD   $16, R21
 	SUBS  $16, R22, R22
 	BGT   verify16_exact2
 	MOVD  R19, R0
@@ -697,9 +682,7 @@ verify_tail16_exact2:
 	VLD1  (R20), [V10.B16]
 	VLD1  (R21), [V11.B16]
 	VEOR  V10.B16, V11.B16, V12.B16
-	MOVD  $tail_mask_table<>(SB), R6
-	ADD   R22<<4, R6, R6
-	VLD1  (R6), [V13.B16]
+	WORD  $0x3cf67b0d               // LDR Q13, [R24, R22, LSL #4]
 	VAND  V13.B16, V12.B16, V12.B16
 	WORD  $0x6e30a98c
 	FMOVS F12, R6
