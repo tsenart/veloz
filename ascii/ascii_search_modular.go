@@ -55,7 +55,7 @@ func IndexFoldModular(haystack, needle string) int {
 		haystack = haystack[resumePos:]
 	}
 
-	result = indexFold2Byte(haystack, normNeedle, off1, off2)
+	result = indexFold2Byte(haystack, normNeedle, off1, off2-off1)
 
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
@@ -107,7 +107,7 @@ func IndexExactModular(haystack, needle string) int {
 		haystack = haystack[resumePos:]
 	}
 
-	result = indexExact2Byte(haystack, needle, off1, off2)
+	result = indexExact2Byte(haystack, needle, off1, off2-off1)
 
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
@@ -160,7 +160,7 @@ func indexFoldModularWithOffsets(haystack, normNeedle string, off1, off2 int) in
 		haystack = haystack[resumePos:]
 	}
 
-	result = indexFold2Byte(haystack, normNeedle, off1, off2)
+	result = indexFold2Byte(haystack, normNeedle, off1, off2-off1)
 
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
@@ -198,7 +198,7 @@ func indexExactModularWithOffsets(haystack, needle string, off1, off2 int) int {
 		haystack = haystack[resumePos:]
 	}
 
-	result = indexExact2Byte(haystack, needle, off1, off2)
+	result = indexExact2Byte(haystack, needle, off1, off2-off1)
 
 	if !resultExceeded(result) {
 		pos := resultPosition(result)

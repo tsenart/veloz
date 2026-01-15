@@ -149,7 +149,6 @@ uint64_t index_fold_1byte(
     const int64_t search_len = haystack_len - needle_len + 1;
     const uint8x16_t v_mask = vdupq_n_u8(rare1_is_letter ? 0x20 : 0x00);
     const uint8x16_t v_target = vdupq_n_u8(rare1);
-    const int64_t base_threshold = (needle_len >= 64) ? 2 : 4;
     
     unsigned char *search_ptr = haystack + off1;
     unsigned char *search_start = search_ptr;
@@ -158,9 +157,10 @@ uint64_t index_fold_1byte(
     int64_t failures = 0;
     
     // 32-byte loop
+    // Threshold: 16 failures warmup + 1 per 16 bytes scanned (like memchr's 50-invocation warmup)
     while (remaining >= 32) {
         int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 8);
+        int64_t threshold = 16 + (bytes_scanned >> 4);
         
         uint8x16_t d0 = vld1q_u8(search_ptr);
         uint8x16_t d1 = vld1q_u8(search_ptr + 16);
@@ -222,7 +222,7 @@ uint64_t index_fold_1byte(
     // 16-byte loop
     while (remaining >= 16) {
         int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 8);
+        int64_t threshold = 16 + (bytes_scanned >> 4);
         
         uint8x16_t d = vld1q_u8(search_ptr);
         search_ptr += 16;
@@ -257,7 +257,7 @@ uint64_t index_fold_1byte(
     const uint8_t scalar_mask = rare1_is_letter ? 0x20 : 0x00;
     while (remaining > 0) {
         int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 8);
+        int64_t threshold = 16 + (bytes_scanned >> 4);
         int64_t pos = search_ptr - haystack - off1;
         
         uint8_t c = *search_ptr;
@@ -293,7 +293,6 @@ uint64_t index_exact_1byte(
     const uint8_t rare1 = needle[off1];
     const int64_t search_len = haystack_len - needle_len + 1;
     const uint8x16_t v_target = vdupq_n_u8(rare1);
-    const int64_t base_threshold = (needle_len >= 64) ? 2 : 4;
     
     unsigned char *search_ptr = haystack + off1;
     unsigned char *search_start = search_ptr;
@@ -302,9 +301,10 @@ uint64_t index_exact_1byte(
     int64_t failures = 0;
     
     // 32-byte loop
+    // Threshold: 16 failures warmup + 1 per 16 bytes scanned
     while (remaining >= 32) {
         int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 8);
+        int64_t threshold = 16 + (bytes_scanned >> 4);
         
         uint8x16_t d0 = vld1q_u8(search_ptr);
         uint8x16_t d1 = vld1q_u8(search_ptr + 16);
@@ -365,7 +365,7 @@ uint64_t index_exact_1byte(
     // 16-byte loop
     while (remaining >= 16) {
         int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 8);
+        int64_t threshold = 16 + (bytes_scanned >> 4);
         
         uint8x16_t d = vld1q_u8(search_ptr);
         search_ptr += 16;
@@ -399,7 +399,7 @@ uint64_t index_exact_1byte(
     // Scalar loop
     while (remaining > 0) {
         int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 8);
+        int64_t threshold = 16 + (bytes_scanned >> 4);
         int64_t pos = search_ptr - haystack - off1;
         
         if (*search_ptr == rare1 && pos >= 0 && pos < search_len) {
@@ -425,50 +425,45 @@ uint64_t index_exact_1byte(
 // =============================================================================
 
 // 2-byte search with case folding (pre-normalized lowercase needle)
-// Derives rare bytes from needle[off1] and needle[off2]
-// gocc: indexFold2Byte(haystack string, needle string, off1 int, off2 int) uint64
+// Derives rare bytes from needle[off1] and needle[off1 + off2Delta]
+// gocc: indexFold2Byte(haystack string, needle string, off1 int, off2Delta int) uint64
 uint64_t index_fold_2byte(
     unsigned char *haystack, int64_t haystack_len,
     unsigned char *needle, int64_t needle_len,
-    int64_t off1, int64_t off2)
+    int64_t off1, int64_t off2_delta)
 {
     if (haystack_len < needle_len) return RESULT_NOT_FOUND;
     if (needle_len == 0) return RESULT_FOUND(0);
     
     const uint8_t rare1 = needle[off1];
-    const uint8_t rare2 = needle[off2];
-    const int rare1_is_letter = (unsigned)(rare1 - 'a') < 26;
-    const int rare2_is_letter = (unsigned)(rare2 - 'a') < 26;
+    const uint8_t rare2 = needle[off1 + off2_delta];
+    const uint8_t mask1 = ((unsigned)(rare1 - 'a') < 26) ? 0x20 : 0x00;
+    const uint8_t mask2 = ((unsigned)(rare2 - 'a') < 26) ? 0x20 : 0x00;
     const int64_t search_len = haystack_len - needle_len + 1;
-    const uint8x16_t v_mask1 = vdupq_n_u8(rare1_is_letter ? 0x20 : 0x00);
+    const uint8x16_t v_mask1 = vdupq_n_u8(mask1);
     const uint8x16_t v_target1 = vdupq_n_u8(rare1);
-    const uint8x16_t v_mask2 = vdupq_n_u8(rare2_is_letter ? 0x20 : 0x00);
+    const uint8x16_t v_mask2 = vdupq_n_u8(mask2);
     const uint8x16_t v_target2 = vdupq_n_u8(rare2);
-    const int64_t off2_delta = off2 - off1;
-    const int64_t base_threshold = (needle_len >= 64) ? 2 : 4;
     
     unsigned char *search_ptr = haystack + off1;
-    unsigned char *search_start = search_ptr;
-    unsigned char *data_end = haystack + haystack_len;
     int64_t remaining = search_len;
     int64_t failures = 0;
     
     // 64-byte loop
-    while (remaining >= 64 && search_ptr + 64 <= data_end &&
-           search_ptr + off2_delta + 64 <= data_end) {
-        int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 5);
+    // Threshold: 32 failures warmup + 1 per 8 bytes scanned
+    while (remaining >= 64) {
+        int64_t bytes_scanned = search_len - remaining;
+        int64_t threshold = 32 + (bytes_scanned >> 3);
         
         uint8x16_t r1_0 = vld1q_u8(search_ptr);
         uint8x16_t r1_1 = vld1q_u8(search_ptr + 16);
         uint8x16_t r1_2 = vld1q_u8(search_ptr + 32);
         uint8x16_t r1_3 = vld1q_u8(search_ptr + 48);
         
-        unsigned char *rare2_ptr = search_ptr + off2_delta;
-        uint8x16_t r2_0 = vld1q_u8(rare2_ptr);
-        uint8x16_t r2_1 = vld1q_u8(rare2_ptr + 16);
-        uint8x16_t r2_2 = vld1q_u8(rare2_ptr + 32);
-        uint8x16_t r2_3 = vld1q_u8(rare2_ptr + 48);
+        uint8x16_t r2_0 = vld1q_u8(search_ptr + off2_delta);
+        uint8x16_t r2_1 = vld1q_u8(search_ptr + off2_delta + 16);
+        uint8x16_t r2_2 = vld1q_u8(search_ptr + off2_delta + 32);
+        uint8x16_t r2_3 = vld1q_u8(search_ptr + off2_delta + 48);
         
         search_ptr += 64;
         remaining -= 64;
@@ -503,7 +498,7 @@ uint64_t index_fold_2byte(
                 
                 if (pos >= 0 && pos < search_len) {
                     unsigned char *candidate = haystack + pos;
-                    int64_t cand_remaining = data_end - candidate;
+                    int64_t cand_remaining = haystack_len - pos;
                     if (verify_fold_prenorm(candidate, needle, needle_len, cand_remaining)) {
                         return RESULT_FOUND(pos);
                     }
@@ -519,10 +514,9 @@ uint64_t index_fold_2byte(
     }
     
     // 16-byte loop
-    while (remaining >= 16 && search_ptr + 16 <= data_end &&
-           search_ptr + off2_delta + 16 <= data_end) {
-        int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 5);
+    while (remaining >= 16) {
+        int64_t bytes_scanned = search_len - remaining;
+        int64_t threshold = 32 + (bytes_scanned >> 3);
         
         uint8x16_t r1 = vld1q_u8(search_ptr);
         uint8x16_t r2 = vld1q_u8(search_ptr + off2_delta);
@@ -543,7 +537,7 @@ uint64_t index_fold_2byte(
             
             if (pos >= 0 && pos < search_len) {
                 unsigned char *candidate = haystack + pos;
-                int64_t cand_remaining = data_end - candidate;
+                int64_t cand_remaining = haystack_len - pos;
                 if (verify_fold_prenorm(candidate, needle, needle_len, cand_remaining)) {
                     return RESULT_FOUND(pos);
                 }
@@ -558,20 +552,17 @@ uint64_t index_fold_2byte(
     }
     
     // Scalar loop
-    while (remaining > 0 && search_ptr + off2_delta < data_end) {
-        int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 5);
+    while (remaining > 0) {
+        int64_t bytes_scanned = search_len - remaining;
+        int64_t threshold = 32 + (bytes_scanned >> 3);
         int64_t pos = search_ptr - haystack - off1;
         
         uint8_t c1 = *search_ptr;
         uint8_t c2 = *(search_ptr + off2_delta);
         
-        bool match1 = rare1_is_letter ? ((c1 | 0x20) == rare1) : (c1 == rare1);
-        bool match2 = rare2_is_letter ? ((c2 | 0x20) == rare2) : (c2 == rare2);
-        
-        if (match1 && match2 && pos >= 0 && pos < search_len) {
+        if (((c1 | mask1) == rare1) && ((c2 | mask2) == rare2) && pos >= 0 && pos < search_len) {
             unsigned char *candidate = haystack + pos;
-            int64_t cand_remaining = data_end - candidate;
+            int64_t cand_remaining = haystack_len - pos;
             if (verify_fold_prenorm(candidate, needle, needle_len, cand_remaining)) {
                 return RESULT_FOUND(pos);
             }
@@ -588,46 +579,41 @@ uint64_t index_fold_2byte(
 }
 
 // 2-byte search for exact matching (no case folding)
-// Derives rare bytes from needle[off1] and needle[off2]
-// gocc: indexExact2Byte(haystack string, needle string, off1 int, off2 int) uint64
+// Derives rare bytes from needle[off1] and needle[off1 + off2Delta]
+// gocc: indexExact2Byte(haystack string, needle string, off1 int, off2Delta int) uint64
 uint64_t index_exact_2byte(
     unsigned char *haystack, int64_t haystack_len,
     unsigned char *needle, int64_t needle_len,
-    int64_t off1, int64_t off2)
+    int64_t off1, int64_t off2_delta)
 {
     if (haystack_len < needle_len) return RESULT_NOT_FOUND;
     if (needle_len == 0) return RESULT_FOUND(0);
     
     const uint8_t rare1 = needle[off1];
-    const uint8_t rare2 = needle[off2];
+    const uint8_t rare2 = needle[off1 + off2_delta];
     const int64_t search_len = haystack_len - needle_len + 1;
     const uint8x16_t v_target1 = vdupq_n_u8(rare1);
     const uint8x16_t v_target2 = vdupq_n_u8(rare2);
-    const int64_t off2_delta = off2 - off1;
-    const int64_t base_threshold = (needle_len >= 64) ? 2 : 4;
     
     unsigned char *search_ptr = haystack + off1;
-    unsigned char *search_start = search_ptr;
-    unsigned char *data_end = haystack + haystack_len;
     int64_t remaining = search_len;
     int64_t failures = 0;
     
     // 64-byte loop
-    while (remaining >= 64 && search_ptr + 64 <= data_end &&
-           search_ptr + off2_delta + 64 <= data_end) {
-        int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 5);
+    // Threshold: 32 failures warmup + 1 per 8 bytes scanned
+    while (remaining >= 64) {
+        int64_t bytes_scanned = search_len - remaining;
+        int64_t threshold = 32 + (bytes_scanned >> 3);
         
         uint8x16_t r1_0 = vld1q_u8(search_ptr);
         uint8x16_t r1_1 = vld1q_u8(search_ptr + 16);
         uint8x16_t r1_2 = vld1q_u8(search_ptr + 32);
         uint8x16_t r1_3 = vld1q_u8(search_ptr + 48);
         
-        unsigned char *rare2_ptr = search_ptr + off2_delta;
-        uint8x16_t r2_0 = vld1q_u8(rare2_ptr);
-        uint8x16_t r2_1 = vld1q_u8(rare2_ptr + 16);
-        uint8x16_t r2_2 = vld1q_u8(rare2_ptr + 32);
-        uint8x16_t r2_3 = vld1q_u8(rare2_ptr + 48);
+        uint8x16_t r2_0 = vld1q_u8(search_ptr + off2_delta);
+        uint8x16_t r2_1 = vld1q_u8(search_ptr + off2_delta + 16);
+        uint8x16_t r2_2 = vld1q_u8(search_ptr + off2_delta + 32);
+        uint8x16_t r2_3 = vld1q_u8(search_ptr + off2_delta + 48);
         
         search_ptr += 64;
         remaining -= 64;
@@ -662,7 +648,7 @@ uint64_t index_exact_2byte(
                 
                 if (pos >= 0 && pos < search_len) {
                     unsigned char *candidate = haystack + pos;
-                    int64_t cand_remaining = data_end - candidate;
+                    int64_t cand_remaining = haystack_len - pos;
                     if (verify_exact(candidate, needle, needle_len, cand_remaining)) {
                         return RESULT_FOUND(pos);
                     }
@@ -678,10 +664,9 @@ uint64_t index_exact_2byte(
     }
     
     // 16-byte loop
-    while (remaining >= 16 && search_ptr + 16 <= data_end &&
-           search_ptr + off2_delta + 16 <= data_end) {
-        int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 5);
+    while (remaining >= 16) {
+        int64_t bytes_scanned = search_len - remaining;
+        int64_t threshold = 32 + (bytes_scanned >> 3);
         
         uint8x16_t r1 = vld1q_u8(search_ptr);
         uint8x16_t r2 = vld1q_u8(search_ptr + off2_delta);
@@ -702,7 +687,7 @@ uint64_t index_exact_2byte(
             
             if (pos >= 0 && pos < search_len) {
                 unsigned char *candidate = haystack + pos;
-                int64_t cand_remaining = data_end - candidate;
+                int64_t cand_remaining = haystack_len - pos;
                 if (verify_exact(candidate, needle, needle_len, cand_remaining)) {
                     return RESULT_FOUND(pos);
                 }
@@ -717,14 +702,14 @@ uint64_t index_exact_2byte(
     }
     
     // Scalar loop
-    while (remaining > 0 && search_ptr + off2_delta < data_end) {
-        int64_t bytes_scanned = search_ptr - search_start;
-        int64_t threshold = base_threshold + (bytes_scanned >> 5);
+    while (remaining > 0) {
+        int64_t bytes_scanned = search_len - remaining;
+        int64_t threshold = 32 + (bytes_scanned >> 3);
         int64_t pos = search_ptr - haystack - off1;
         
         if (*search_ptr == rare1 && *(search_ptr + off2_delta) == rare2 && pos >= 0 && pos < search_len) {
             unsigned char *candidate = haystack + pos;
-            int64_t cand_remaining = data_end - candidate;
+            int64_t cand_remaining = haystack_len - pos;
             if (verify_exact(candidate, needle, needle_len, cand_remaining)) {
                 return RESULT_FOUND(pos);
             }
