@@ -472,27 +472,24 @@ TEXT ·indexExact2Byte(SB), NOSPLIT, $0-56
 	MOVBU (R6)(R5), R8          // R8 = rare2
 
 	ADD   $1, R9, R10           // remaining
-	ADD   R4, R0, R11           // searchPtr
+	ADD   R4, R0, R11           // searchPtr (ptr1)
+	ADD   R5, R11, R14          // ptr2 = ptr1 + off2_delta
 	MOVD  R11, R12              // searchStart
 	MOVD  ZR, R13               // failures
 
 	VMOV  R7, V0.B16
 	VMOV  R8, V1.B16
 
-	MOVD  SYNDROME_MAGIC, R14
-	VMOV  R14, V5.S4
+	MOVD  SYNDROME_MAGIC, R23
+	VMOV  R23, V5.S4
 
 	CMP   $64, R10
 	BLT   loop16_exact2
 
 loop64_exact2:
-	// Load 64 bytes for rare1
+	// Load 64 bytes from both pointers with post-increment
 	VLD1.P 64(R11), [V16.B16, V17.B16, V18.B16, V19.B16]
-
-	// Load 64 bytes at rare2 offset
-	SUB   $64, R11, R14
-	ADD   R5, R14, R14
-	VLD1  (R14), [V20.B16, V21.B16, V22.B16, V23.B16]
+	VLD1.P 64(R14), [V20.B16, V21.B16, V22.B16, V23.B16]
 
 	SUBS  $64, R10, R10
 
@@ -640,10 +637,8 @@ loop16_exact2:
 	BLT   scalar_exact2
 
 loop16_inner_exact2:
-	VLD1  (R11), [V16.B16]
-	ADD   R5, R11, R14
-	VLD1  (R14), [V17.B16]
-	ADD   $16, R11
+	VLD1.P 16(R11), [V16.B16]
+	VLD1.P 16(R14), [V17.B16]
 	SUBS  $16, R10, R10
 
 	VCMEQ V0.B16, V16.B16, V19.B16
@@ -739,7 +734,6 @@ scalar_exact2:
 
 scalar_loop_exact2:
 	MOVBU (R11), R15
-	ADD   R5, R11, R14
 	MOVBU (R14), R16
 
 	CMP   R7, R15
@@ -758,8 +752,8 @@ scalar_loop_exact2:
 
 scalar_verify_exact2:
 	MOVBU (R20), R6
-	MOVBU (R21), R14
-	CMP   R6, R14
+	MOVBU (R21), R23
+	CMP   R6, R23
 	BNE   scalar_fail_exact2
 	ADD   $1, R20
 	ADD   $1, R21
@@ -779,6 +773,7 @@ scalar_fail_exact2:
 
 scalar_next_exact2:
 	ADD   $1, R11
+	ADD   $1, R14
 	SUBS  $1, R10, R10
 	BGT   scalar_loop_exact2
 
