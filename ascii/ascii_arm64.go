@@ -65,33 +65,13 @@ func IndexAny(data, chars string) int {
 // indexFoldRabinKarp is now generated via gocc in ascii_neon.go
 
 // IndexFold finds the first case-insensitive match of needle in haystack.
-// Uses SIMD rare-byte filtering with on-the-fly case folding.
+// Uses staged SIMD kernels with adaptive rare-byte filtering.
 func IndexFold(haystack, needle string) int {
-	if len(needle) == 0 {
-		return 0
-	}
-	if len(haystack) < len(needle) {
-		return -1
-	}
-	// O(1) rare byte selection via sampling (case-insensitive)
-	rare1, off1, rare2, off2 := selectRarePairSample(needle, nil, false)
-	// Pre-normalize to lowercase for the assembly verifier.
-	normNeedle := normalizeASCII(needle)
-	return indexFoldNEON(haystack, rare1, off1, rare2, off2, normNeedle)
+	return IndexFoldModular(haystack, needle)
 }
 
 // Index finds the first occurrence of the pattern in haystack.
 // Uses the case sensitivity specified when the Searcher was created.
 func (s Searcher) Index(haystack string) int {
-	if len(s.raw) == 0 {
-		return 0
-	}
-	if len(haystack) < len(s.raw) {
-		return -1
-	}
-	if s.caseSensitive {
-		return IndexNEON(haystack, s.rare1, s.off1, s.rare2, s.off2, s.raw)
-	}
-	// Use handwritten assembly implementation with pre-computed rare bytes
-	return indexFoldNEON(haystack, s.rare1, s.off1, s.rare2, s.off2, s.norm)
+	return s.IndexModular(haystack)
 }

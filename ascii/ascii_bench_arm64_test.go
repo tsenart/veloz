@@ -192,14 +192,6 @@ func BenchmarkSearch(b *testing.B) {
 					benchSink = corpusSearcher.IndexModular(tc.haystack)
 				}
 			})
-
-			// IndexFoldOriginal (for regression comparison)
-			b.Run(name(tc.scenario, tc.size, "original"), func(b *testing.B) {
-				b.SetBytes(int64(len(tc.haystack)))
-				for i := 0; i < b.N; i++ {
-					benchSink = IndexFoldOriginal(tc.haystack, tc.needle)
-				}
-			})
 		}
 	})
 }

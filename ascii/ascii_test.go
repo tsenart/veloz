@@ -882,11 +882,6 @@ func FuzzIndexFold(f *testing.F) {
 		if modRes != want {
 			t.Fatalf("IndexFoldModular(%q, %q) = %v; want %v", istr, isubstr, modRes, want)
 		}
-
-		origRes := IndexFoldOriginal(istr, isubstr)
-		if origRes != want {
-			t.Fatalf("IndexFoldOriginal(%q, %q) = %v; want %v", istr, isubstr, origRes, want)
-		}
 	})
 }
 

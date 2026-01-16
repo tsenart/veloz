@@ -218,7 +218,8 @@ func indexFoldModularWithOffsets(haystack, normNeedle string, off1, off2 int) in
 	if len(normNeedle) <= 8 {
 		pos = indexFoldBruteForce(haystack, normNeedle)
 	} else {
-		pos = indexFoldRabinKarp(haystack, normNeedle)
+		// normNeedle is already lowercase, use prefolded variant
+		pos = indexPrefoldedRabinKarp(haystack, normNeedle)
 	}
 	if pos >= 0 {
 		return pos + resumePos

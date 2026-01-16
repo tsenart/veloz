@@ -24,6 +24,3 @@ func indexExactRabinKarp(haystack string, needle string) int
 
 //go:noescape
 func indexPrefoldedRabinKarp(haystack string, needle string) int
-
-//go:noescape
-func IndexNEON(haystack string, rare1 byte, off1 int, rare2 byte, off2 int, needle string) int
