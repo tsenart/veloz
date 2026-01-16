@@ -744,6 +744,38 @@ func FuzzIndexFold(f *testing.F) {
 	f.Add("test\xfe\xffend", "\xfe\xff")
 	f.Add(strings.Repeat("\x80", 100)+"needle", "NEEDLE")
 
+	// Boundary-length needles (1, 2, 16, 17, 32, 33 bytes)
+	f.Add("abcdefghijklmnop", "a")                                                                          // 1-byte needle
+	f.Add("abcdefghijklmnop", "ab")                                                                         // 2-byte needle
+	f.Add("xyzabcdefghijklmnopqrstuvwxyz", "abcdefghijklmnop")                                              // 16-byte needle
+	f.Add("xyzabcdefghijklmnopqrstuvwxyz0", "abcdefghijklmnopq")                                            // 17-byte needle
+	f.Add(strings.Repeat("x", 50)+"abcdefghijklmnopqrstuvwxyz012345", "abcdefghijklmnopqrstuvwxyz012345")   // 32-byte needle
+	f.Add(strings.Repeat("x", 50)+"abcdefghijklmnopqrstuvwxyz0123456", "abcdefghijklmnopqrstuvwxyz0123456") // 33-byte needle
+
+	// Alignment-stress: matches at positions 15, 16, 31, 32, 63, 64
+	f.Add(strings.Repeat("x", 15)+"needle"+strings.Repeat("y", 20), "needle")  // match at 15
+	f.Add(strings.Repeat("x", 16)+"needle"+strings.Repeat("y", 20), "needle")  // match at 16
+	f.Add(strings.Repeat("x", 31)+"needle"+strings.Repeat("y", 20), "needle")  // match at 31
+	f.Add(strings.Repeat("x", 32)+"needle"+strings.Repeat("y", 20), "needle")  // match at 32
+	f.Add(strings.Repeat("x", 63)+"needle"+strings.Repeat("y", 20), "needle")  // match at 63
+	f.Add(strings.Repeat("x", 64)+"needle"+strings.Repeat("y", 20), "needle")  // match at 64
+	f.Add(strings.Repeat("x", 127)+"needle"+strings.Repeat("y", 20), "needle") // match at 127
+
+	// Repeated-pattern stress: needle is suffix of repeating pattern
+	f.Add(strings.Repeat("aaab", 30)+"aaac", "aaac") // partial match many times
+	f.Add(strings.Repeat("abab", 30)+"abac", "abac") // alternating pattern
+	f.Add(strings.Repeat("abc", 50)+"abd", "abd")    // 3-char repeat
+	f.Add(strings.Repeat("aaa", 100)+"aaab", "aaab") // many false positives
+
+	// Long needles (64, 100, 128 bytes)
+	f.Add(strings.Repeat("x", 200)+strings.Repeat("needle", 11), strings.Repeat("needle", 11)) // 66-byte needle
+	f.Add(strings.Repeat("y", 300)+strings.Repeat("z", 100), strings.Repeat("z", 100))         // 100-byte needle
+	f.Add(strings.Repeat("a", 500)+strings.Repeat("b", 128), strings.Repeat("b", 128))         // 128-byte needle
+
+	// Edge: no match with similar prefix
+	f.Add("abcdefghijklmnop", "abcdefghijklmnox")
+	f.Add(strings.Repeat("test", 50), "tesX")
+
 	f.Fuzz(func(t *testing.T, istr, isubstr string) {
 		// Ground truth from naive implementation
 		want := indexFoldNaive(istr, isubstr)
@@ -1405,6 +1437,38 @@ func FuzzIndex(f *testing.F) {
 	f.Add(strings.Repeat("x", 20)+"needle", "needle")
 	f.Add(strings.Repeat("x", 17)+"QZ", "QZ")
 	f.Add(strings.Repeat("y", 31)+"z", "z")
+
+	// Boundary-length needles (1, 2, 16, 17, 32, 33 bytes)
+	f.Add("abcdefghijklmnop", "a")
+	f.Add("abcdefghijklmnop", "ab")
+	f.Add("xyzabcdefghijklmnopqrstuvwxyz", "abcdefghijklmnop")
+	f.Add("xyzabcdefghijklmnopqrstuvwxyz0", "abcdefghijklmnopq")
+	f.Add(strings.Repeat("x", 50)+"abcdefghijklmnopqrstuvwxyz012345", "abcdefghijklmnopqrstuvwxyz012345")
+	f.Add(strings.Repeat("x", 50)+"abcdefghijklmnopqrstuvwxyz0123456", "abcdefghijklmnopqrstuvwxyz0123456")
+
+	// Alignment-stress: matches at positions 15, 16, 31, 32, 63, 64
+	f.Add(strings.Repeat("x", 15)+"needle"+strings.Repeat("y", 20), "needle")
+	f.Add(strings.Repeat("x", 16)+"needle"+strings.Repeat("y", 20), "needle")
+	f.Add(strings.Repeat("x", 31)+"needle"+strings.Repeat("y", 20), "needle")
+	f.Add(strings.Repeat("x", 32)+"needle"+strings.Repeat("y", 20), "needle")
+	f.Add(strings.Repeat("x", 63)+"needle"+strings.Repeat("y", 20), "needle")
+	f.Add(strings.Repeat("x", 64)+"needle"+strings.Repeat("y", 20), "needle")
+	f.Add(strings.Repeat("x", 127)+"needle"+strings.Repeat("y", 20), "needle")
+
+	// Repeated-pattern stress
+	f.Add(strings.Repeat("aaab", 30)+"aaac", "aaac")
+	f.Add(strings.Repeat("abab", 30)+"abac", "abac")
+	f.Add(strings.Repeat("abc", 50)+"abd", "abd")
+	f.Add(strings.Repeat("aaa", 100)+"aaab", "aaab")
+
+	// Long needles (64, 100, 128 bytes)
+	f.Add(strings.Repeat("x", 200)+strings.Repeat("needle", 11), strings.Repeat("needle", 11))
+	f.Add(strings.Repeat("y", 300)+strings.Repeat("z", 100), strings.Repeat("z", 100))
+	f.Add(strings.Repeat("a", 500)+strings.Repeat("b", 128), strings.Repeat("b", 128))
+
+	// No match with similar prefix
+	f.Add("abcdefghijklmnop", "abcdefghijklmnox")
+	f.Add(strings.Repeat("test", 50), "tesX")
 
 	f.Fuzz(func(t *testing.T, haystack, needle string) {
 		got := strings.Index(haystack, needle)
