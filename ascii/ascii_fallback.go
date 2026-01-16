@@ -188,6 +188,78 @@ func getRankTable(ranks []byte, caseSensitive bool) *[256]uint16 {
 	return &customFolded
 }
 
+// selectRarePairFast finds two rare bytes by checking only first, middle, last positions.
+// Ultra-low overhead O(1) - just 3 rank lookups. Returns off1, off2 with off1 < off2.
+func selectRarePairFast(pattern string, caseSensitive bool) (off1, off2 int) {
+	n := len(pattern)
+	if n <= 1 {
+		return 0, 0
+	}
+
+	// Check 3 positions: first, middle, last
+	first, mid, last := 0, n/2, n-1
+	if mid == first {
+		mid = last // For len=2, mid==first, use last instead
+	}
+
+	var b0, b1, b2 byte
+	if caseSensitive {
+		b0, b1, b2 = pattern[first], pattern[mid], pattern[last]
+	} else {
+		b0, b1, b2 = toLower(pattern[first]), toLower(pattern[mid]), toLower(pattern[last])
+	}
+
+	r0, r1, r2 := byteRank[b0], byteRank[b1], byteRank[b2]
+
+	// Find the rarest byte position
+	bestOff := first
+	bestRank := r0
+	if r2 < bestRank {
+		bestOff = last
+		bestRank = r2
+	}
+	if r1 < bestRank {
+		bestOff = mid
+	}
+
+	// Second byte: pick one that's different from the best, preferring the one farther away
+	off1 = bestOff
+	if bestOff == first {
+		// Best is first, pick last if different, else mid
+		if b2 != b0 {
+			off2 = last
+		} else if b1 != b0 {
+			off2 = mid
+		} else {
+			off2 = last // All same, use last for max spread
+		}
+	} else if bestOff == last {
+		// Best is last, pick first if different, else mid
+		if b0 != b2 {
+			off2 = first
+		} else if b1 != b2 {
+			off2 = mid
+		} else {
+			off2 = first // All same, use first for max spread
+		}
+	} else {
+		// Best is mid, pick last if different (more spread), else first
+		if b2 != b1 {
+			off2 = last
+		} else if b0 != b1 {
+			off2 = first
+		} else {
+			off2 = last // All same
+		}
+	}
+
+	// Ensure off1 < off2
+	if off1 > off2 {
+		off1, off2 = off2, off1
+	}
+	return off1, off2
+}
+
 // selectRarePairSample finds two rare bytes by sampling 8 positions across the pattern.
 // O(1) complexity - used by IndexFold for one-shot searches.
 // Returns the two rarest bytes and their offsets, with off1 < off2.

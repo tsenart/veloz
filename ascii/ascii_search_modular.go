@@ -49,11 +49,10 @@ func IndexFoldModular(haystack, needle string) int {
 		off2 = n / 2
 	}
 
-	// Decide strategy: skip 1-byte filter for pathological patterns
-	// Pathological patterns:
-	// 1. first == last (like "aab", quoted strings like "num")
-	// 2. first byte is a very common letter (a,e,i,o,u,t,n,s,r - top 9 by frequency)
-	skip1Byte := first == last || (first >= 'a' && first <= 'z' && byteRank[first] > 240)
+	// Skip 1-byte filter for pathological patterns:
+	// - first byte is very common (any byte type, not just letters)
+	// - first == last AND first is not rare (covers quotes at 164, common letters)
+	skip1Byte := byteRank[first] > 240 || (first == last && byteRank[first] > 160)
 
 	var result uint64
 	var resumePos int
@@ -106,15 +105,16 @@ func IndexExactModular(haystack, needle string) int {
 
 	// Use first + last byte (max spread), or first + middle if first==last
 	first := needle[0]
+	last := needle[n-1]
 	off2 := n - 1
-	if n > 2 && first == needle[n-1] {
+	if n > 2 && first == last {
 		off2 = n / 2
 	}
 
 	// Skip 1-byte filter for pathological patterns:
-	// 1. first == last (like "aab", quoted strings)
-	// 2. first byte is a very common letter
-	skip1Byte := first == needle[n-1] || (first >= 'a' && first <= 'z' && byteRank[first] > 240)
+	// - first byte is very common (any byte type, not just letters)
+	// - first == last AND first is not rare (covers quotes at 164, common letters)
+	skip1Byte := byteRank[first] > 240 || (first == last && byteRank[first] > 160)
 
 	var result uint64
 	var resumePos int
