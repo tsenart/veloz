@@ -113,29 +113,13 @@ func IndexExactModular(haystack, needle string) int {
 		off2 = n / 2
 	}
 
-	// Short needles: skip 1-byte stage, go directly to 2-byte filter
-	if n <= 16 {
-		result := indexExact2Byte(haystack, needle, 0, off2)
-		if !resultExceeded(result) {
-			return resultPosition(result)
-		}
-		resumePos := resultPosition(result)
-		if resumePos > 0 {
-			haystack = haystack[resumePos:]
-		}
-		pos := strings.Index(haystack, needle)
-		if pos >= 0 {
-			return pos + resumePos
-		}
-		return -1
-	}
-
-	// Long needles: 1-byte -> 2-byte -> RK
+	// Stage 1: 1-byte filter (fast scan, adaptive threshold)
 	result := indexExact1Byte(haystack, needle, 0)
 	if !resultExceeded(result) {
 		return resultPosition(result)
 	}
 
+	// Stage 2: 2-byte filter (more selective)
 	resumePos := resultPosition(result)
 	if resumePos > 0 {
 		haystack = haystack[resumePos:]
@@ -150,6 +134,7 @@ func IndexExactModular(haystack, needle string) int {
 		return -1
 	}
 
+	// Stage 3: Rabin-Karp fallback
 	resumePos2 := resultPosition(result)
 	if resumePos2 > 0 {
 		haystack = haystack[resumePos2:]
