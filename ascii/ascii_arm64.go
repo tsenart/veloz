@@ -47,15 +47,3 @@ func IndexAny(data, chars string) int {
 }
 
 // indexFoldRabinKarp is now generated via gocc in ascii_neon.go
-
-// IndexFold finds the first case-insensitive match of needle in haystack.
-// Uses staged SIMD kernels with adaptive rare-byte filtering.
-func IndexFold(haystack, needle string) int {
-	return IndexFoldModular(haystack, needle)
-}
-
-// Index finds the first occurrence of the pattern in haystack.
-// Uses the case sensitivity specified when the Searcher was created.
-func (s Searcher) Index(haystack string) int {
-	return s.IndexModular(haystack)
-}

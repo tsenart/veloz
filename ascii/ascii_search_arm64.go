@@ -4,7 +4,7 @@ package ascii
 
 import "strings"
 
-// Modular Go-driven substring search using staged NEON kernels.
+// Staged NEON kernels for substring search with Go-level control flow.
 // Architecture:
 //   Stage 1: 1-byte filter (rare byte at off1)
 //   Stage 2: 2-byte filter (rare bytes at off1 and off2)
@@ -31,8 +31,9 @@ func resultPosition(r uint64) int {
 	return int(pos)
 }
 
-// IndexFoldModular performs case-insensitive substring search using staged kernels.
-func IndexFoldModular(haystack, needle string) int {
+// IndexFold finds the first case-insensitive match of needle in haystack.
+// Uses staged SIMD kernels with adaptive rare-byte filtering.
+func IndexFold(haystack, needle string) int {
 	n := len(needle)
 	if n == 0 {
 		return 0
@@ -97,8 +98,9 @@ func IndexFoldModular(haystack, needle string) int {
 	return -1
 }
 
-// IndexExactModular performs case-sensitive substring search using staged kernels.
-func IndexExactModular(haystack, needle string) int {
+// Index finds the first case-sensitive match of needle in haystack.
+// Uses staged SIMD kernels with adaptive rare-byte filtering.
+func Index(haystack, needle string) int {
 	n := len(needle)
 	if n == 0 {
 		return 0
@@ -163,8 +165,9 @@ func IndexExactModular(haystack, needle string) int {
 	return -1
 }
 
-// SearcherModular provides pre-computed rare byte search using staged kernels.
-func (s Searcher) IndexModular(haystack string) int {
+// Index finds the first occurrence of the pattern in haystack.
+// Uses the case sensitivity specified when the Searcher was created.
+func (s Searcher) Index(haystack string) int {
 	if len(s.raw) == 0 {
 		return 0
 	}
@@ -173,12 +176,12 @@ func (s Searcher) IndexModular(haystack string) int {
 	}
 
 	if s.caseSensitive {
-		return indexExactModularWithOffsets(haystack, s.raw, s.off1, s.off2)
+		return indexExactWithOffsets(haystack, s.raw, s.off1, s.off2)
 	}
-	return indexFoldModularWithOffsets(haystack, s.norm, s.off1, s.off2)
+	return indexFoldWithOffsets(haystack, s.norm, s.off1, s.off2)
 }
 
-func indexFoldModularWithOffsets(haystack, normNeedle string, off1, off2 int) int {
+func indexFoldWithOffsets(haystack, normNeedle string, off1, off2 int) int {
 	// Searcher already selected rare bytes via corpus analysis or selectRarePairFull.
 	// Only skip 1-byte for the pathological case where both offsets are the same.
 	skip1Byte := off1 == off2
@@ -239,7 +242,7 @@ func indexFoldBruteForce(haystack, normNeedle string) int {
 	return -1
 }
 
-func indexExactModularWithOffsets(haystack, needle string, off1, off2 int) int {
+func indexExactWithOffsets(haystack, needle string, off1, off2 int) int {
 	// Searcher already selected rare bytes. Only skip 1-byte if offsets are the same.
 	skip1Byte := off1 == off2
 

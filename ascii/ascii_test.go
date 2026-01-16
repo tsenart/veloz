@@ -444,14 +444,6 @@ func BenchmarkAsciiIndexFold(b *testing.B) {
 				IndexFold(s1, s2)
 			}
 		})
-
-		b.Run(fmt.Sprintf("modular-%d", n), func(b *testing.B) {
-			b.SetBytes(int64(len(s1)))
-			for i := 0; i < b.N; i++ {
-				IndexFoldModular(s1, s2)
-			}
-		})
-
 	}
 }
 
@@ -483,17 +475,11 @@ func BenchmarkIndexTorture(b *testing.B) {
 		}
 	})
 
-	// SearchNeedle with MakeNeedle should auto-detect pathological pattern and use Rabin-Karp
+	// Searcher with MakeNeedle should auto-detect pathological pattern and use Rabin-Karp
 	needle := NewSearcher(benchNeedleTorture, false)
-	b.Run("SearchNeedle", func(b *testing.B) {
+	b.Run("Searcher", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			needle.Index(benchInputTorture)
-		}
-	})
-
-	b.Run("modular", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			IndexFoldModular(benchInputTorture, benchNeedleTorture)
 		}
 	})
 }
@@ -878,9 +864,9 @@ func FuzzIndexFold(f *testing.F) {
 			t.Fatalf("indexFoldRabinKarpGo(%q, %q) = %v; want %v", istr, isubstr, rkGoRes, want)
 		}
 
-		modRes := IndexFoldModular(istr, isubstr)
+		modRes := IndexFold(istr, isubstr)
 		if modRes != want {
-			t.Fatalf("IndexFoldModular(%q, %q) = %v; want %v", istr, isubstr, modRes, want)
+			t.Fatalf("IndexFold(%q, %q) = %v; want %v", istr, isubstr, modRes, want)
 		}
 	})
 }
@@ -1725,9 +1711,9 @@ func FuzzSearcherCaseSensitive(f *testing.F) {
 				haystack, needle, got, sGot)
 		}
 
-		modGot := IndexExactModular(haystack, needle)
+		modGot := Index(haystack, needle)
 		if got != modGot {
-			t.Fatalf("strings.Index vs IndexExactModular mismatch: strings.Index(%q, %q) = %d, IndexExactModular = %d",
+			t.Fatalf("strings.Index vs Index mismatch: strings.Index(%q, %q) = %d, Index = %d",
 				haystack, needle, got, modGot)
 		}
 	})
@@ -1746,9 +1732,9 @@ func TestScalarPathVerifyFail(t *testing.T) {
 	needle := "00000000000000000000000000000000"
 
 	want := indexFoldGo(haystack, needle)
-	got := IndexFoldModular(haystack, needle)
+	got := IndexFold(haystack, needle)
 	if got != want {
-		t.Fatalf("IndexFoldModular() = %d, want %d\nhaystack: %q\nneedle: %q",
+		t.Fatalf("IndexFold() = %d, want %d\nhaystack: %q\nneedle: %q",
 			got, want, haystack, needle)
 	}
 }

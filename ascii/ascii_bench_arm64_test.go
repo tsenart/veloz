@@ -110,38 +110,30 @@ func BenchmarkSearch(b *testing.B) {
 				}
 			})
 
-			// IndexExactModular (ad-hoc, staged kernels)
-			b.Run(name(tc.scenario, tc.size, "modular"), func(b *testing.B) {
+			// Index (ad-hoc)
+			b.Run(name(tc.scenario, tc.size, "Index"), func(b *testing.B) {
 				b.SetBytes(int64(len(tc.haystack)))
 				for i := 0; i < b.N; i++ {
-					benchSink = IndexExactModular(tc.haystack, tc.needle)
+					benchSink = Index(tc.haystack, tc.needle)
 				}
 			})
 
 			// Searcher with pre-computed rare bytes (case-sensitive)
 			searcher := NewSearcher(tc.needle, true)
-			b.Run(name(tc.scenario, tc.size, "searcher"), func(b *testing.B) {
+			b.Run(name(tc.scenario, tc.size, "Searcher"), func(b *testing.B) {
 				b.SetBytes(int64(len(tc.haystack)))
 				for i := 0; i < b.N; i++ {
 					benchSink = searcher.Index(tc.haystack)
 				}
 			})
 
-			// Searcher.IndexModular (pre-computed + staged kernels)
-			b.Run(name(tc.scenario, tc.size, "searcher_mod"), func(b *testing.B) {
-				b.SetBytes(int64(len(tc.haystack)))
-				for i := 0; i < b.N; i++ {
-					benchSink = searcher.IndexModular(tc.haystack)
-				}
-			})
-
 			// Searcher with corpus-computed ranks (optimal rare byte selection)
 			ranks := buildRankTable(tc.haystack)
 			corpusSearcher := NewSearcherWithRanks(tc.needle, ranks[:], true)
-			b.Run(name(tc.scenario, tc.size, "corpus_mod"), func(b *testing.B) {
+			b.Run(name(tc.scenario, tc.size, "Searcher_corpus"), func(b *testing.B) {
 				b.SetBytes(int64(len(tc.haystack)))
 				for i := 0; i < b.N; i++ {
-					benchSink = corpusSearcher.IndexModular(tc.haystack)
+					benchSink = corpusSearcher.Index(tc.haystack)
 				}
 			})
 		}
@@ -150,46 +142,30 @@ func BenchmarkSearch(b *testing.B) {
 	// Case-insensitive implementations
 	b.Run("mode=fold", func(b *testing.B) {
 		for _, tc := range cases {
-			// IndexFold (asm, rare-byte selection)
-			b.Run(name(tc.scenario, tc.size, "asm"), func(b *testing.B) {
+			// IndexFold (ad-hoc)
+			b.Run(name(tc.scenario, tc.size, "IndexFold"), func(b *testing.B) {
 				b.SetBytes(int64(len(tc.haystack)))
 				for i := 0; i < b.N; i++ {
 					benchSink = IndexFold(tc.haystack, tc.needle)
 				}
 			})
 
-			// IndexFoldModular (staged kernels)
-			b.Run(name(tc.scenario, tc.size, "modular"), func(b *testing.B) {
-				b.SetBytes(int64(len(tc.haystack)))
-				for i := 0; i < b.N; i++ {
-					benchSink = IndexFoldModular(tc.haystack, tc.needle)
-				}
-			})
-
 			// Searcher (pre-computed, case-insensitive)
 			searcher := NewSearcher(tc.needle, false)
-			b.Run(name(tc.scenario, tc.size, "searcher"), func(b *testing.B) {
+			b.Run(name(tc.scenario, tc.size, "Searcher"), func(b *testing.B) {
 				b.SetBytes(int64(len(tc.haystack)))
 				for i := 0; i < b.N; i++ {
 					benchSink = searcher.Index(tc.haystack)
 				}
 			})
 
-			// Searcher.IndexModular
-			b.Run(name(tc.scenario, tc.size, "searcher_mod"), func(b *testing.B) {
-				b.SetBytes(int64(len(tc.haystack)))
-				for i := 0; i < b.N; i++ {
-					benchSink = searcher.IndexModular(tc.haystack)
-				}
-			})
-
 			// Searcher with corpus-computed ranks (optimal rare byte selection)
 			ranks := buildRankTable(tc.haystack)
 			corpusSearcher := NewSearcherWithRanks(tc.needle, ranks[:], false)
-			b.Run(name(tc.scenario, tc.size, "corpus_mod"), func(b *testing.B) {
+			b.Run(name(tc.scenario, tc.size, "Searcher_corpus"), func(b *testing.B) {
 				b.SetBytes(int64(len(tc.haystack)))
 				for i := 0; i < b.N; i++ {
-					benchSink = corpusSearcher.IndexModular(tc.haystack)
+					benchSink = corpusSearcher.Index(tc.haystack)
 				}
 			})
 		}

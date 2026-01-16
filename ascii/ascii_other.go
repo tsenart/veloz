@@ -14,8 +14,13 @@ func EqualFold(a, b string) bool {
 	return equalFoldGo(a, b)
 }
 
-func IndexFold(a, b string) int {
-	return indexFoldGo(a, b)
+func IndexFold(haystack, needle string) int {
+	return indexFoldGo(haystack, needle)
+}
+
+// Index finds the first case-sensitive match of needle in haystack.
+func Index(haystack, needle string) int {
+	return strings.Index(haystack, needle)
 }
 
 func indexFoldRabinKarp(a, b string) int {
@@ -50,3 +55,5 @@ func (s Searcher) Index(haystack string) int {
 	}
 	return indexFoldGo(haystack, s.raw)
 }
+
+

@@ -1,6 +1,8 @@
 package ascii
 
 import (
+	"strings"
+
 	"golang.org/x/sys/cpu"
 )
 
@@ -37,9 +39,13 @@ func EqualFold(a, b string) bool {
 	return equalFoldAvx(a, b)
 }
 
-func IndexFold(a, b string) int {
-	// TODO: implement acceleration for this
-	return indexFoldGo(a, b)
+func IndexFold(haystack, needle string) int {
+	return indexFoldGo(haystack, needle)
+}
+
+// Index finds the first case-sensitive match of needle in haystack.
+func Index(haystack, needle string) int {
+	return strings.Index(haystack, needle)
 }
 
 func indexFoldRabinKarp(a, b string) int {
@@ -74,3 +80,5 @@ func (s Searcher) Index(haystack string) int {
 	}
 	return indexFoldGo(haystack, s.raw)
 }
+
+
