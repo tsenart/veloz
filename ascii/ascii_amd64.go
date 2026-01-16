@@ -43,28 +43,11 @@ func IndexFold(a, b string) int {
 }
 
 func indexFoldRabinKarp(a, b string) int {
-	// FIXME: definitely not Rabin-Karp
 	return indexFoldGo(a, b)
 }
 
 func IndexAny(s, chars string) int {
 	return indexAnyGo(s, chars)
-}
-
-// CharSet represents a precomputed character set for fast IndexAny lookups.
-// Build once with MakeCharSet, then reuse with IndexAnyCharSet.
-type CharSet struct {
-	bitset [4]uint64
-}
-
-// MakeCharSet creates a CharSet from the given characters.
-func MakeCharSet(chars string) CharSet {
-	var cs CharSet
-	for i := 0; i < len(chars); i++ {
-		c := chars[i]
-		cs.bitset[c>>6] |= 1 << (c & 63)
-	}
-	return cs
 }
 
 // IndexAnyCharSet finds the first occurrence of any byte from cs in data.

@@ -1,5 +1,21 @@
 package ascii
 
+// CharSet represents a precomputed character set for fast IndexAny lookups.
+// Build once with MakeCharSet, then reuse with IndexAnyCharSet.
+type CharSet struct {
+	bitset [4]uint64
+}
+
+// MakeCharSet creates a CharSet from the given characters.
+func MakeCharSet(chars string) CharSet {
+	var cs CharSet
+	for i := 0; i < len(chars); i++ {
+		c := chars[i]
+		cs.bitset[c>>6] |= 1 << (c & 63)
+	}
+	return cs
+}
+
 func HasPrefixFold(s, prefix string) bool {
 	if len(s) < len(prefix) {
 		return false
