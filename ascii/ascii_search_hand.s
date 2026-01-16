@@ -2738,6 +2738,7 @@ fold2_try32:
 	BGT   fold2_clear32
 
 	ADD   R0, R16, R17
+	ADD   $0x200, R20, R20        // Mark as 32-byte path (0x200 + chunk_offset)
 	B     fold2_verify
 
 fold2_clear32:
@@ -2974,6 +2975,8 @@ fold2_verify_fail:
 	// Clear bit and continue
 	CMP   $0x100, R20
 	BEQ   fold2_clear16_from_verify
+	CMP   $0x200, R20
+	BGE   fold2_clear32_from_verify
 	B     fold2_clear64_from_verify
 
 fold2_clear16_from_verify:
@@ -2985,6 +2988,20 @@ fold2_clear16_from_verify:
 	CMP   $16, R12
 	BGE   fold2_loop16
 	B     fold2_scalar_entry
+
+fold2_clear32_from_verify:
+	// R20 = 0x200 + chunk_offset (0 or 16)
+	LSL   $1, R15, R17
+	MOVD  $1, R19
+	LSL   R17, R19, R17
+	BIC   R17, R13, R13
+	AND   $0xFF, R20, R20         // Extract chunk offset back
+	CBNZ  R13, fold2_try32
+	// Current chunk exhausted, check next chunk or loop
+	CBZ   R20, fold2_check32_chunk1
+	CMP   $32, R12
+	BGE   fold2_loop32
+	B     fold2_loop16_entry
 
 fold2_clear64_from_verify:
 	LSL   $1, R15, R17             // bitpos = byteIndex << 1
@@ -4672,11 +4689,9 @@ raw2_clear16_from_verify:
 
 raw2_clear32_from_verify:
 	// R20 = 0x200 + chunk_offset (0 or 16)
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17
 	MOVD  $1, R19
 	LSL   R17, R19, R17
-	SUB   $1, R17
 	BIC   R17, R13, R13
 	AND   $0xFF, R20, R20         // Extract chunk offset back
 	CBNZ  R13, raw2_try32
