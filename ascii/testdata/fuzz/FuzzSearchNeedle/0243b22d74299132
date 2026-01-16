@@ -1,3 +1,0 @@
-go test fuzz v1
-string("abc\x80\xba\xba\xba\xba\xba\xba\xba\xbadc\x80deef")
-string("\x80d")
