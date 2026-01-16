@@ -1443,5 +1443,3 @@ func TestScalarPathVerifyFail(t *testing.T) {
 			got, want, haystack, needle)
 	}
 }
-
-
