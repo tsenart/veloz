@@ -512,21 +512,6 @@ static inline uint8_t fold_byte(uint8_t c) {
     return fold_table[c];
 }
 
-// Case-fold 16 bytes using NEON
-static inline uint8x16_t fold_bytes_neon(uint8x16_t v) {
-    const uint8x16_t char_a = vdupq_n_u8('a');
-    const uint8x16_t char_z = vdupq_n_u8('z');
-    const uint8x16_t mask = vdupq_n_u8(0xDF);
-    
-    // is_lower = (v >= 'a') & (v <= 'z')
-    uint8x16_t ge_a = vcgeq_u8(v, char_a);
-    uint8x16_t le_z = vcleq_u8(v, char_z);
-    uint8x16_t is_lower = vandq_u8(ge_a, le_z);
-    
-    // Clear bit 5 for lowercase letters
-    return vbslq_u8(is_lower, vandq_u8(v, mask), v);
-}
-
 // Use same prime as Go stdlib for better hash distribution
 #define PRIME_RK 16777619
 
@@ -542,46 +527,6 @@ static inline uint32_t pow_prime(uint64_t n) {
     return result;
 }
 
-// Compute hash of needle (case-folded) using standard Rabin-Karp formula
-// H = a_0*B^{w-1} + a_1*B^{w-2} + ... + a_{w-1}
-static inline uint32_t hash_needle_fold(const unsigned char *needle, int64_t needle_len) {
-    uint32_t hash = 0;
-    for (int64_t i = 0; i < needle_len; i++) {
-        hash = hash * PRIME_RK + fold_table[needle[i]];
-    }
-    return hash;
-}
-
-// =============================================================================
-// SIMD Rabin-Karp with reversed polynomial (Matt Sills' optimization)
-// =============================================================================
-// Standard RK: H[n+1] = B * H[n] + new - B^w * old  (multiply on critical path)
-// Reversed:    H'[n+1] = H'[n] + new * B^(n+w) - old * B^n  (only add/sub on critical path)
-// Compare:     H'[n] == target * B^n
-//
-// This eliminates the loop-carried multiply dependency, allowing all multiplications
-// to be issued in parallel since they only depend on the input bytes and exponents.
-
-// Compute reversed polynomial hash with case folding: H' = sum(fold(s[j]) * B^j) for j in [0, len)
-static inline uint32_t hash_reversed_fold(const unsigned char *s, int64_t len) {
-    uint32_t h = 0;
-    uint32_t Bj = 1;  // B^j
-    for (int64_t j = 0; j < len; j++) {
-        h += fold_table[s[j]] * Bj;
-        Bj *= PRIME_RK;
-    }
-    return h;
-}
-
-// Standard Rabin-Karp hash function (for position-independent hashes)
-static inline uint32_t hash_rk_fold(const unsigned char *s, int64_t len) {
-    uint32_t h = 0;
-    for (int64_t j = 0; j < len; j++) {
-        h = h * PRIME_RK + fold_table[s[j]];
-    }
-    return h;
-}
-
 // =============================================================================
 // Fast NEON block-based initial hashing (reduces dependency depth)
 // =============================================================================
@@ -595,15 +540,6 @@ static inline uint8x16_t fold16_ascii_rk(uint8x16_t v,
     uint8x16_t x = vsubq_u8(v, va);
     uint8x16_t m = vcleq_u8(x, vz);
     return vsubq_u8(v, vandq_u8(m, v20));
-}
-
-// Fold 8 bytes ASCII
-static inline uint8x8_t fold8_ascii_rk(uint8x8_t v,
-                                       uint8x8_t va, uint8x8_t vz, uint8x8_t v20)
-{
-    uint8x8_t x = vsub_u8(v, va);
-    uint8x8_t m = vcle_u8(x, vz);
-    return vsub_u8(v, vand_u8(m, v20));
 }
 
 // Compute hash of 16 folded bytes: b0*B^15 + b1*B^14 + ... + b15
