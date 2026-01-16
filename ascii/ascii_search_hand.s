@@ -717,7 +717,7 @@ TEXT ·indexExact2Byte(SB), NOSPLIT, $0-56
 	CMP   $2048, R10
 	BGE   loop128_exact2_entry
 	CMP   $64, R10
-	BLT   loop16_exact2
+	BLT   loop32_exact2_entry
 	B     loop64_exact2
 
 // ============================================================================
@@ -1125,6 +1125,106 @@ next_chunk64_exact2:
 	CMP   $64, R10
 	BGE   loop64_exact2
 
+// ============================================================================
+// FALLBACK 32-BYTE LOOP: For remainders 32-63 bytes
+// ============================================================================
+loop32_exact2_entry:
+	CMP   $32, R10
+	BLT   loop16_exact2
+
+loop32_exact2:
+	VLD1.P 32(R11), [V16.B16, V17.B16]
+	VLD1.P 32(R14), [V18.B16, V19.B16]
+	SUBS   $32, R10, R10
+
+	VCMEQ  V0.B16, V16.B16, V20.B16
+	VCMEQ  V0.B16, V17.B16, V21.B16
+	VCMEQ  V1.B16, V18.B16, V22.B16
+	VCMEQ  V1.B16, V19.B16, V23.B16
+	VAND   V20.B16, V22.B16, V20.B16
+	VAND   V21.B16, V23.B16, V21.B16
+	VORR   V20.B16, V21.B16, V6.B16
+	VADDP  V6.D2, V6.D2, V6.D2
+	VMOV   V6.D[0], R15
+	BLS    end32_exact2
+	CBNZ   R15, end32_match_exact2
+	CMP    $32, R10
+	BGE    loop32_exact2
+	B      loop16_exact2
+
+end32_exact2:
+	CBZ   R15, loop16_exact2
+
+end32_match_exact2:
+	VAND  V5.B16, V20.B16, V20.B16
+	VAND  V5.B16, V21.B16, V21.B16
+	VADDP V21.B16, V20.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.D[0], R15
+
+process_syndrome32_exact2:
+	RBIT  R15, R17
+	CLZ   R17, R17
+	LSR   $1, R17, R17
+
+	SUB   $32, R11, R19
+	ADD   R17, R19, R19
+	SUB   R12, R19, R19
+
+	CMP   R9, R19
+	BGT   clear_bit32_exact2
+
+	ADD   R0, R19, R20
+	MOVD  R2, R21
+	MOVD  R3, R22
+
+verify32_exact2:
+	CMP   $16, R22
+	BLT   verify_tail32_exact2
+	VLD1.P 16(R20), [V10.B16]
+	VLD1.P 16(R21), [V11.B16]
+	VEOR  V10.B16, V11.B16, V12.B16
+	WORD  $0x6e30a98c
+	FMOVS F12, R6
+	CBNZW R6, fail32_exact2
+	SUBS  $16, R22, R22
+	BGT   verify32_exact2
+	MOVD  R19, R0
+	MOVD  R0, ret+48(FP)
+	RET
+
+verify_tail32_exact2:
+	CMP   $0, R22
+	BLE   found32_exact2
+	VLD1  (R20), [V10.B16]
+	VLD1  (R21), [V11.B16]
+	VEOR  V10.B16, V11.B16, V12.B16
+	WORD  $0x3cf67b0d               // LDR Q13, [R24, R22, LSL #4]
+	VAND  V13.B16, V12.B16, V12.B16
+	WORD  $0x6e30a98c
+	FMOVS F12, R6
+	CBNZW R6, fail32_exact2
+
+found32_exact2:
+	MOVD  R19, R0
+	MOVD  R0, ret+48(FP)
+	RET
+
+fail32_exact2:
+	SUB   R12, R11, R20
+	LSR   $3, R20, R20
+	ADD   $32, R20
+	ADD   $1, R13
+	CMP   R20, R13
+	BGE   exceeded32_exact2
+
+clear_bit32_exact2:
+	LSL   $1, R17, R20
+	MOVD  $1, R21
+	LSL   R20, R21, R20
+	BIC   R20, R15, R15
+	CBNZ  R15, process_syndrome32_exact2
+
 loop16_exact2:
 	CMP   $16, R10
 	BLT   scalar_exact2
@@ -1276,6 +1376,7 @@ found_zero_exact2:
 	RET
 
 exceeded64_exact2:
+exceeded32_exact2:
 exceeded16_exact2:
 exceeded_scalar_exact2:
 	MOVD  $0x8000000000000000, R20   // exceeded flag (bit 63)
@@ -2138,14 +2239,13 @@ fold1_scalar_nl_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	VEOR  V10.B16, V11.B16, V12.B16
-	VCMEQ V8.B16, V12.B16, V14.B16
-	VORR  V8.B16, V10.B16, V13.B16
-	VADD  V4.B16, V13.B16, V13.B16
-	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16
-	VAND  V14.B16, V13.B16, V13.B16
-	VAND  V8.B16, V13.B16, V13.B16
-	VEOR  V13.B16, V12.B16, V10.B16
+	// Normalize haystack then compare with pre-normalized needle
+	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
+	VADD  V4.B16, V13.B16, V14.B16  // V14 = (h|0x20) + 159
+	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (is_letter mask)
+	VAND  V8.B16, V14.B16, V14.B16  // V14 = is_letter ? 0x20 : 0
+	VORR  V14.B16, V10.B16, V10.B16 // V10 = h_norm
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, fold1_scalar_nl_vloop
@@ -2157,17 +2257,16 @@ fold1_scalar_nl_vtail:
 
 	VLD1  (R21), [V10.B16]
 	VLD1  (R22), [V11.B16]
-	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
+	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4] - tail mask
 
-	VEOR  V10.B16, V11.B16, V12.B16
-	VCMEQ V8.B16, V12.B16, V14.B16
-	VORR  V8.B16, V10.B16, V15.B16
-	VADD  V4.B16, V15.B16, V15.B16
-	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16
-	VAND  V14.B16, V15.B16, V15.B16
-	VAND  V8.B16, V15.B16, V15.B16
-	VEOR  V15.B16, V12.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16
+	// Normalize haystack then compare with pre-normalized needle
+	VORR  V8.B16, V10.B16, V14.B16  // V14 = h | 0x20
+	VADD  V4.B16, V14.B16, V15.B16  // V15 = (h|0x20) + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is_letter mask)
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = is_letter ? 0x20 : 0
+	VORR  V15.B16, V10.B16, V10.B16 // V10 = h_norm
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	VAND  V13.B16, V10.B16, V10.B16 // Mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, fold1_scalar_nl_verify_fail
@@ -2445,7 +2544,7 @@ fold2_setup:
 	MOVD  ZR, R25                 // R25 = failure count = 0
 
 	CMP   $64, R12
-	BLT   fold2_loop16_entry
+	BLT   fold2_loop32_entry
 
 // ============================================================================
 // 64-BYTE LOOP: Process 64 bytes per iteration
@@ -2562,6 +2661,107 @@ fold2_next_chunk64:
 	BLT   fold2_check_chunk64
 	CMP   $64, R12
 	BGE   fold2_loop64
+
+// ============================================================================
+// 32-BYTE LOOP: For remainders 32-63 bytes
+// ============================================================================
+fold2_loop32_entry:
+	CMP   $32, R12
+	BLT   fold2_loop16_entry
+
+fold2_loop32:
+	VLD1.P 32(R10), [V16.B16, V17.B16]
+	VLD1.P 32(R14), [V18.B16, V19.B16]
+	SUBS  $32, R12, R12
+
+	// Case-fold and compare rare1
+	VORR  V0.B16, V16.B16, V20.B16
+	VORR  V0.B16, V17.B16, V21.B16
+	VCMEQ V1.B16, V20.B16, V20.B16
+	VCMEQ V1.B16, V21.B16, V21.B16
+
+	// Case-fold and compare rare2
+	VORR  V2.B16, V18.B16, V22.B16
+	VORR  V2.B16, V19.B16, V23.B16
+	VCMEQ V3.B16, V22.B16, V22.B16
+	VCMEQ V3.B16, V23.B16, V23.B16
+
+	// AND both results
+	VAND  V20.B16, V22.B16, V20.B16
+	VAND  V21.B16, V23.B16, V21.B16
+
+	// Quick check
+	VORR  V20.B16, V21.B16, V6.B16
+	VADDP V6.D2, V6.D2, V6.D2
+	VMOV  V6.D[0], R13
+
+	BLT   fold2_end32
+	CBZ   R13, fold2_loop32
+
+fold2_end32:
+	CBZ   R13, fold2_loop16_entry
+
+	// Extract syndromes
+	VAND  V5.B16, V20.B16, V20.B16
+	VAND  V5.B16, V21.B16, V21.B16
+
+	// Check chunk 0
+	VADDP V20.B16, V20.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $0, R20
+	CBNZ  R13, fold2_try32
+
+	// Check chunk 1
+	VADDP V21.B16, V21.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $16, R20
+	CBNZ  R13, fold2_try32
+
+	// No matches, continue
+	CMP   $32, R12
+	BGE   fold2_loop32
+	B     fold2_loop16_entry
+
+fold2_try32:
+	RBIT  R13, R15
+	CLZ   R15, R15
+	LSR   $1, R15, R15
+
+	SUB   $32, R10, R16
+	ADD   R20, R16, R16
+	ADD   R15, R16, R16
+	SUB   R11, R16, R16
+
+	CMP   R9, R16
+	BGT   fold2_clear32
+
+	ADD   R0, R16, R17
+	B     fold2_verify
+
+fold2_clear32:
+	LSL   $1, R15, R17
+	MOVD  $1, R19
+	LSL   R17, R19, R17
+	BIC   R17, R13, R13
+	CBNZ  R13, fold2_try32
+
+	// Move to chunk 1 if in chunk 0
+	CBZ   R20, fold2_check32_chunk1
+	CMP   $32, R12
+	BGE   fold2_loop32
+	B     fold2_loop16_entry
+
+fold2_check32_chunk1:
+	VADDP V21.B16, V21.B16, V6.B16
+	VADDP V6.B16, V6.B16, V6.B16
+	VMOV  V6.S[0], R13
+	MOVD  $16, R20
+	CBNZ  R13, fold2_try32
+	CMP   $32, R12
+	BGE   fold2_loop32
+	B     fold2_loop16_entry
 
 // ============================================================================
 // 16-BYTE LOOP
@@ -4014,7 +4214,7 @@ raw2_setup:
 	MOVD  ZR, R25                 // R25 = failure count = 0
 
 	CMP   $64, R12
-	BLT   raw2_loop16_entry
+	BLT   raw2_loop32_entry
 
 // ============================================================================
 // 64-BYTE LOOP
@@ -4131,6 +4331,107 @@ raw2_next_chunk64:
 	BLT   raw2_check_chunk64
 	CMP   $64, R12
 	BGE   raw2_loop64
+
+// ============================================================================
+// 32-BYTE LOOP: For remainders 32-63 bytes
+// ============================================================================
+raw2_loop32_entry:
+	CMP   $32, R12
+	BLT   raw2_loop16_entry
+
+raw2_loop32:
+	VLD1.P 32(R10), [V16.B16, V17.B16]
+	VLD1.P 32(R14), [V18.B16, V19.B16]
+	SUBS  $32, R12, R12
+
+	// Case-fold and compare rare1
+	VORR  V0.B16, V16.B16, V20.B16
+	VORR  V0.B16, V17.B16, V21.B16
+	VCMEQ V1.B16, V20.B16, V20.B16
+	VCMEQ V1.B16, V21.B16, V21.B16
+
+	// Case-fold and compare rare2
+	VORR  V2.B16, V18.B16, V22.B16
+	VORR  V2.B16, V19.B16, V23.B16
+	VCMEQ V3.B16, V22.B16, V22.B16
+	VCMEQ V3.B16, V23.B16, V23.B16
+
+	// AND both results
+	VAND  V20.B16, V22.B16, V20.B16
+	VAND  V21.B16, V23.B16, V21.B16
+
+	// Quick check
+	VORR  V20.B16, V21.B16, V9.B16
+	VADDP V9.D2, V9.D2, V9.D2
+	VMOV  V9.D[0], R13
+
+	BLT   raw2_end32
+	CBZ   R13, raw2_loop32
+
+raw2_end32:
+	CBZ   R13, raw2_loop16_entry
+
+	// Extract syndromes
+	VAND  V5.B16, V20.B16, V20.B16
+	VAND  V5.B16, V21.B16, V21.B16
+
+	// Check chunk 0
+	VADDP V20.B16, V20.B16, V9.B16
+	VADDP V9.B16, V9.B16, V9.B16
+	VMOV  V9.S[0], R13
+	MOVD  $0, R20
+	CBNZ  R13, raw2_try32
+
+	// Check chunk 1
+	VADDP V21.B16, V21.B16, V9.B16
+	VADDP V9.B16, V9.B16, V9.B16
+	VMOV  V9.S[0], R13
+	MOVD  $16, R20
+	CBNZ  R13, raw2_try32
+
+	// No matches, continue
+	CMP   $32, R12
+	BGE   raw2_loop32
+	B     raw2_loop16_entry
+
+raw2_try32:
+	RBIT  R13, R15
+	CLZ   R15, R15
+	LSR   $1, R15, R15
+
+	SUB   $32, R10, R16
+	ADD   R20, R16, R16
+	ADD   R15, R16, R16
+	SUB   R11, R16, R16
+
+	CMP   R9, R16
+	BGT   raw2_clear32
+
+	ADD   R0, R16, R17
+	B     raw2_verify
+
+raw2_clear32:
+	LSL   $1, R15, R17
+	MOVD  $1, R19
+	LSL   R17, R19, R17
+	BIC   R17, R13, R13
+	CBNZ  R13, raw2_try32
+
+	// Move to chunk 1 if in chunk 0
+	CBZ   R20, raw2_check32_chunk1
+	CMP   $32, R12
+	BGE   raw2_loop32
+	B     raw2_loop16_entry
+
+raw2_check32_chunk1:
+	VADDP V21.B16, V21.B16, V9.B16
+	VADDP V9.B16, V9.B16, V9.B16
+	VMOV  V9.S[0], R13
+	MOVD  $16, R20
+	CBNZ  R13, raw2_try32
+	CMP   $32, R12
+	BGE   raw2_loop32
+	B     raw2_loop16_entry
 
 // ============================================================================
 // 16-BYTE LOOP
