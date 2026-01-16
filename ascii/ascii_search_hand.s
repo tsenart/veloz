@@ -80,17 +80,17 @@ loop128_exact1:
 	VCMEQ  V0.B16, V26.B16, V30.B16
 	VCMEQ  V0.B16, V27.B16, V31.B16
 
-	// Combine all 8 chunks for quick check
+	// Combine all 8 chunks for quick check - keep V6 (first64) and V8 (second64)
 	VORR   V16.B16, V17.B16, V6.B16
 	VORR   V18.B16, V19.B16, V7.B16
 	VORR   V28.B16, V29.B16, V8.B16
 	VORR   V30.B16, V31.B16, V9.B16
-	VORR   V6.B16, V7.B16, V6.B16
-	VORR   V8.B16, V9.B16, V8.B16
-	VORR   V6.B16, V8.B16, V6.B16
+	VORR   V6.B16, V7.B16, V6.B16    // V6 = OR(first64)
+	VORR   V8.B16, V9.B16, V8.B16    // V8 = OR(second64)
+	VORR   V6.B16, V8.B16, V9.B16    // V9 = OR(all) - preserve V6 and V8
 
-	VADDP  V6.D2, V6.D2, V6.D2
-	VMOV   V6.D[0], R15
+	VADDP  V9.D2, V9.D2, V9.D2
+	VMOV   V9.D[0], R15
 
 	CMP    $128, R10
 	BLT    end128_exact1
@@ -99,20 +99,14 @@ loop128_exact1:
 end128_exact1:
 	CBZ    R15, loop64_exact1
 
-	// Check first 64 bytes
-	VORR   V16.B16, V17.B16, V6.B16
-	VORR   V18.B16, V19.B16, V7.B16
-	VORR   V6.B16, V7.B16, V6.B16
+	// Check first 64 bytes - V6 already has OR(first64), just reduce
 	VADDP  V6.D2, V6.D2, V6.D2
 	VMOV   V6.D[0], R15
 	CBNZ   R15, first64_exact1
 
-	// Check second 64 bytes
-	VORR   V28.B16, V29.B16, V6.B16
-	VORR   V30.B16, V31.B16, V7.B16
-	VORR   V6.B16, V7.B16, V6.B16
-	VADDP  V6.D2, V6.D2, V6.D2
-	VMOV   V6.D[0], R15
+	// Check second 64 bytes - V8 already has OR(second64), just reduce
+	VADDP  V8.D2, V8.D2, V8.D2
+	VMOV   V8.D[0], R15
 	CBNZ   R15, second64_exact1
 	CMP    $128, R10
 	BGE    loop128_exact1
@@ -779,17 +773,17 @@ loop128_exact2:
 	VAND   V4.B16, V9.B16, V26.B16
 	VAND   V6.B16, V10.B16, V27.B16
 
-	// Combine all 8 chunks for quick check
+	// Combine all 8 chunks for quick check - keep V6 (first64) and V8 (second64)
 	VORR   V16.B16, V17.B16, V6.B16
 	VORR   V18.B16, V19.B16, V7.B16
 	VORR   V24.B16, V25.B16, V8.B16
 	VORR   V26.B16, V27.B16, V9.B16
-	VORR   V6.B16, V7.B16, V6.B16
-	VORR   V8.B16, V9.B16, V8.B16
-	VORR   V6.B16, V8.B16, V6.B16
+	VORR   V6.B16, V7.B16, V6.B16    // V6 = OR(first64)
+	VORR   V8.B16, V9.B16, V8.B16    // V8 = OR(second64)
+	VORR   V6.B16, V8.B16, V10.B16   // V10 = OR(all) - preserve V6 and V8
 
-	VADDP  V6.D2, V6.D2, V6.D2
-	VMOV   V6.D[0], R15
+	VADDP  V10.D2, V10.D2, V10.D2
+	VMOV   V10.D[0], R15
 
 	CMP    $128, R10
 	BLT    end128_exact2
@@ -798,20 +792,14 @@ loop128_exact2:
 end128_exact2:
 	CBZ    R15, loop64_exact2
 
-	// Check first 64 bytes (V16-V19)
-	VORR   V16.B16, V17.B16, V6.B16
-	VORR   V18.B16, V19.B16, V7.B16
-	VORR   V6.B16, V7.B16, V6.B16
+	// Check first 64 bytes - V6 already has OR(first64), just reduce
 	VADDP  V6.D2, V6.D2, V6.D2
 	VMOV   V6.D[0], R15
 	CBNZ   R15, first64_exact2
 
-	// Check second 64 bytes (V24-V27)
-	VORR   V24.B16, V25.B16, V6.B16
-	VORR   V26.B16, V27.B16, V7.B16
-	VORR   V6.B16, V7.B16, V6.B16
-	VADDP  V6.D2, V6.D2, V6.D2
-	VMOV   V6.D[0], R15
+	// Check second 64 bytes - V8 already has OR(second64), just reduce
+	VADDP  V8.D2, V8.D2, V8.D2
+	VMOV   V8.D[0], R15
 	CBNZ   R15, second64_exact2
 	CMP    $128, R10
 	BGE    loop128_exact2
@@ -1643,17 +1631,17 @@ fold1_loop128:
 	VCMEQ V1.B16, V30.B16, V30.B16
 	VCMEQ V1.B16, V31.B16, V31.B16
 
-	// Combine all 8 chunks for quick check
+	// Combine all 8 chunks for quick check - keep V9 (first64) and V11 (second64)
 	VORR  V20.B16, V21.B16, V9.B16
 	VORR  V22.B16, V23.B16, V10.B16
 	VORR  V28.B16, V29.B16, V11.B16
 	VORR  V30.B16, V31.B16, V12.B16
-	VORR  V9.B16, V10.B16, V9.B16
-	VORR  V11.B16, V12.B16, V11.B16
-	VORR  V9.B16, V11.B16, V9.B16
+	VORR  V9.B16, V10.B16, V9.B16    // V9 = OR(first64)
+	VORR  V11.B16, V12.B16, V11.B16  // V11 = OR(second64)
+	VORR  V9.B16, V11.B16, V13.B16   // V13 = OR(all) - preserve V9 and V11
 
-	VADDP V9.D2, V9.D2, V9.D2
-	VMOV  V9.D[0], R13
+	VADDP V13.D2, V13.D2, V13.D2
+	VMOV  V13.D[0], R13
 
 	CMP   $128, R12
 	BLT   fold1_end128
@@ -1662,20 +1650,14 @@ fold1_loop128:
 fold1_end128:
 	CBZ   R13, fold1_loop32
 
-	// Check first 64 bytes
-	VORR  V20.B16, V21.B16, V6.B16
-	VORR  V22.B16, V23.B16, V9.B16
-	VORR  V6.B16, V9.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
+	// Check first 64 bytes - V9 already has OR(first64), just reduce
+	VADDP V9.D2, V9.D2, V9.D2
+	VMOV  V9.D[0], R13
 	CBNZ  R13, fold1_first64
 
-	// Check second 64 bytes
-	VORR  V28.B16, V29.B16, V6.B16
-	VORR  V30.B16, V31.B16, V9.B16
-	VORR  V6.B16, V9.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
+	// Check second 64 bytes - V11 already has OR(second64), just reduce
+	VADDP V11.D2, V11.D2, V11.D2
+	VMOV  V11.D[0], R13
 	CBNZ  R13, fold1_second64
 	CMP   $128, R12
 	BGE   fold1_loop128
@@ -1906,16 +1888,17 @@ fold1_loop128_nl:
 	VCMEQ V1.B16, V26.B16, V30.B16
 	VCMEQ V1.B16, V27.B16, V31.B16
 
+	// Combine all 8 chunks - keep V9 (first64) and V11 (second64)
 	VORR  V20.B16, V21.B16, V9.B16
 	VORR  V22.B16, V23.B16, V10.B16
 	VORR  V28.B16, V29.B16, V11.B16
 	VORR  V30.B16, V31.B16, V12.B16
-	VORR  V9.B16, V10.B16, V9.B16
-	VORR  V11.B16, V12.B16, V11.B16
-	VORR  V9.B16, V11.B16, V9.B16
+	VORR  V9.B16, V10.B16, V9.B16    // V9 = OR(first64)
+	VORR  V11.B16, V12.B16, V11.B16  // V11 = OR(second64)
+	VORR  V9.B16, V11.B16, V13.B16   // V13 = OR(all) - preserve V9 and V11
 
-	VADDP V9.D2, V9.D2, V9.D2
-	VMOV  V9.D[0], R13
+	VADDP V13.D2, V13.D2, V13.D2
+	VMOV  V13.D[0], R13
 
 	CMP   $128, R12
 	BLT   fold1_end128_nl
@@ -1924,18 +1907,14 @@ fold1_loop128_nl:
 fold1_end128_nl:
 	CBZ   R13, fold1_loop32_nl
 
-	VORR  V20.B16, V21.B16, V6.B16
-	VORR  V22.B16, V23.B16, V9.B16
-	VORR  V6.B16, V9.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
+	// Check first 64 bytes - V9 already has OR(first64), just reduce
+	VADDP V9.D2, V9.D2, V9.D2
+	VMOV  V9.D[0], R13
 	CBNZ  R13, fold1_first64_nl
 
-	VORR  V28.B16, V29.B16, V6.B16
-	VORR  V30.B16, V31.B16, V9.B16
-	VORR  V6.B16, V9.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
+	// Check second 64 bytes - V11 already has OR(second64), just reduce
+	VADDP V11.D2, V11.D2, V11.D2
+	VMOV  V11.D[0], R13
 	CBNZ  R13, fold1_second64_nl
 	CMP   $128, R12
 	BGE   fold1_loop128_nl
@@ -3245,16 +3224,17 @@ raw1_loop128:
 	VCMEQ V1.B16, V30.B16, V30.B16
 	VCMEQ V1.B16, V31.B16, V31.B16
 
+	// Combine all 8 chunks - keep V9 (first64) and V11 (second64)
 	VORR  V20.B16, V21.B16, V9.B16
 	VORR  V22.B16, V23.B16, V10.B16
 	VORR  V28.B16, V29.B16, V11.B16
 	VORR  V30.B16, V31.B16, V12.B16
-	VORR  V9.B16, V10.B16, V9.B16
-	VORR  V11.B16, V12.B16, V11.B16
-	VORR  V9.B16, V11.B16, V9.B16
+	VORR  V9.B16, V10.B16, V9.B16    // V9 = OR(first64)
+	VORR  V11.B16, V12.B16, V11.B16  // V11 = OR(second64)
+	VORR  V9.B16, V11.B16, V13.B16   // V13 = OR(all) - preserve V9 and V11
 
-	VADDP V9.D2, V9.D2, V9.D2
-	VMOV  V9.D[0], R13
+	VADDP V13.D2, V13.D2, V13.D2
+	VMOV  V13.D[0], R13
 
 	CMP   $128, R12
 	BLT   raw1_end128
@@ -3263,18 +3243,14 @@ raw1_loop128:
 raw1_end128:
 	CBZ   R13, raw1_loop32
 
-	VORR  V20.B16, V21.B16, V6.B16
-	VORR  V22.B16, V23.B16, V9.B16
-	VORR  V6.B16, V9.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
+	// Check first 64 bytes - V9 already has OR(first64), just reduce
+	VADDP V9.D2, V9.D2, V9.D2
+	VMOV  V9.D[0], R13
 	CBNZ  R13, raw1_first64
 
-	VORR  V28.B16, V29.B16, V6.B16
-	VORR  V30.B16, V31.B16, V9.B16
-	VORR  V6.B16, V9.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
+	// Check second 64 bytes - V11 already has OR(second64), just reduce
+	VADDP V11.D2, V11.D2, V11.D2
+	VMOV  V11.D[0], R13
 	CBNZ  R13, raw1_second64
 	CMP   $128, R12
 	BGE   raw1_loop128
@@ -3507,16 +3483,17 @@ raw1_loop128_nl:
 	VCMEQ V1.B16, V26.B16, V30.B16
 	VCMEQ V1.B16, V27.B16, V31.B16
 
+	// Combine all 8 chunks - keep V9 (first64) and V11 (second64)
 	VORR  V20.B16, V21.B16, V9.B16
 	VORR  V22.B16, V23.B16, V10.B16
 	VORR  V28.B16, V29.B16, V11.B16
 	VORR  V30.B16, V31.B16, V12.B16
-	VORR  V9.B16, V10.B16, V9.B16
-	VORR  V11.B16, V12.B16, V11.B16
-	VORR  V9.B16, V11.B16, V9.B16
+	VORR  V9.B16, V10.B16, V9.B16    // V9 = OR(first64)
+	VORR  V11.B16, V12.B16, V11.B16  // V11 = OR(second64)
+	VORR  V9.B16, V11.B16, V13.B16   // V13 = OR(all) - preserve V9 and V11
 
-	VADDP V9.D2, V9.D2, V9.D2
-	VMOV  V9.D[0], R13
+	VADDP V13.D2, V13.D2, V13.D2
+	VMOV  V13.D[0], R13
 
 	CMP   $128, R12
 	BLT   raw1_end128_nl
@@ -3525,18 +3502,14 @@ raw1_loop128_nl:
 raw1_end128_nl:
 	CBZ   R13, raw1_loop32_nl
 
-	VORR  V20.B16, V21.B16, V6.B16
-	VORR  V22.B16, V23.B16, V9.B16
-	VORR  V6.B16, V9.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
+	// Check first 64 bytes - V9 already has OR(first64), just reduce
+	VADDP V9.D2, V9.D2, V9.D2
+	VMOV  V9.D[0], R13
 	CBNZ  R13, raw1_first64_nl
 
-	VORR  V28.B16, V29.B16, V6.B16
-	VORR  V30.B16, V31.B16, V9.B16
-	VORR  V6.B16, V9.B16, V6.B16
-	VADDP V6.D2, V6.D2, V6.D2
-	VMOV  V6.D[0], R13
+	// Check second 64 bytes - V11 already has OR(second64), just reduce
+	VADDP V11.D2, V11.D2, V11.D2
+	VMOV  V11.D[0], R13
 	CBNZ  R13, raw1_second64_nl
 	CMP   $128, R12
 	BGE   raw1_loop128_nl
