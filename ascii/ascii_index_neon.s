@@ -2146,12 +2146,10 @@ fold1_try16_nl:
 	B     fold1_verify
 
 fold1_clear16_nl:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, fold1_try16_nl
 
 fold1_check16_nl_continue:
@@ -3175,14 +3173,12 @@ raw1_try32:
 	B     raw1_verify
 
 raw1_clear32:
-	AND   $0x7F, R14, R17
-	ADD   $1, R15, R20
-	SUB   R17, R20, R20
-	LSL   $1, R20, R20
+	AND   $0x7F, R14, R17          // R17 = chunk offset
+	SUB   R17, R15, R20            // R20 = byteIndex - chunkOffset
+	LSL   $1, R20, R20             // bitpos = localByteIndex << 1
 	MOVD  $1, R19
-	LSL   R20, R19, R20
-	SUB   $1, R20, R20
-	BIC   R20, R13, R13
+	LSL   R20, R19, R20            // 1 << bitpos
+	BIC   R20, R13, R13            // Clear just that bit
 	CBNZ  R13, raw1_try32
 
 	CMP   $128, R14
@@ -3338,13 +3334,11 @@ raw1_try128:
 	B     raw1_verify
 
 raw1_clear128:
-	ADD   $1, R15, R17
-	SUB   R14, R17, R17
-	LSL   $1, R17, R17
+	SUB   R14, R15, R17            // R17 = byteIndex - chunkOffset
+	LSL   $1, R17, R17             // bitpos = localByteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, raw1_try128
 
 	ADD   $16, R14, R14
@@ -3445,14 +3439,12 @@ raw1_try32_nl:
 	B     raw1_verify
 
 raw1_clear32_nl:
-	AND   $0x7F, R14, R17
-	ADD   $1, R15, R20
-	SUB   R17, R20, R20
-	LSL   $1, R20, R20
+	AND   $0x7F, R14, R17          // R17 = chunk offset
+	SUB   R17, R15, R20            // R20 = byteIndex - chunkOffset
+	LSL   $1, R20, R20             // bitpos = localByteIndex << 1
 	MOVD  $1, R19
-	LSL   R20, R19, R20
-	SUB   $1, R20, R20
-	BIC   R20, R13, R13
+	LSL   R20, R19, R20            // 1 << bitpos
+	BIC   R20, R13, R13            // Clear just that bit
 	CBNZ  R13, raw1_try32_nl
 
 	CMP   $128, R14
@@ -3597,13 +3589,11 @@ raw1_try128_nl:
 	B     raw1_verify
 
 raw1_clear128_nl:
-	ADD   $1, R15, R17
-	SUB   R14, R17, R17
-	LSL   $1, R17, R17
+	SUB   R14, R15, R17            // R17 = byteIndex - chunkOffset
+	LSL   $1, R17, R17             // bitpos = localByteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, raw1_try128_nl
 
 	ADD   $16, R14, R14
@@ -3677,12 +3667,10 @@ raw1_try16:
 	B     raw1_verify
 
 raw1_clear16:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, raw1_try16
 
 raw1_check16_continue:
@@ -3745,12 +3733,10 @@ raw1_try16_nl:
 	B     raw1_verify
 
 raw1_clear16_nl:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, raw1_try16_nl
 
 raw1_check16_nl_continue:
@@ -3973,12 +3959,10 @@ raw1_verify_fail:
 	B     raw1_clear32_from_verify
 
 raw1_clear16_from_verify:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBZ   R26, raw1_clear16_nl_from_verify
 	CBNZ  R13, raw1_try16
 	B     raw1_check16_continue
@@ -3988,13 +3972,11 @@ raw1_clear16_nl_from_verify:
 	B     raw1_check16_nl_continue
 
 raw1_clear128_from_verify:
-	ADD   $1, R15, R17
-	SUB   R14, R17, R17
-	LSL   $1, R17, R17
+	SUB   R14, R15, R17            // R17 = byteIndex - chunkOffset
+	LSL   $1, R17, R17             // bitpos = localByteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBZ   R26, raw1_try128_nl_retry
 	CBNZ  R13, raw1_try128
 	ADD   $16, R14, R14
@@ -4012,14 +3994,12 @@ raw1_try128_nl_retry:
 	B     raw1_continue128_nl
 
 raw1_clear32_from_verify:
-	AND   $0x7F, R14, R17
-	ADD   $1, R15, R20
-	SUB   R17, R20, R20
-	LSL   $1, R20, R20
+	AND   $0x7F, R14, R17          // R17 = chunk offset
+	SUB   R17, R15, R20            // R20 = byteIndex - chunkOffset
+	LSL   $1, R20, R20             // bitpos = localByteIndex << 1
 	MOVD  $1, R19
-	LSL   R20, R19, R20
-	SUB   $1, R20, R20
-	BIC   R20, R13, R13
+	LSL   R20, R19, R20            // 1 << bitpos
+	BIC   R20, R13, R13            // Clear just that bit
 	CBZ   R26, raw1_try32_nl_retry
 	CBNZ  R13, raw1_try32
 	CMP   $128, R14
@@ -4330,12 +4310,10 @@ raw2_try64:
 	B     raw2_verify
 
 raw2_clear64:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, raw2_try64
 
 raw2_next_chunk64:
@@ -4495,12 +4473,10 @@ raw2_try16:
 	B     raw2_verify
 
 raw2_clear16:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, raw2_try16
 	CMP   $16, R12
 	BGE   raw2_loop16
@@ -4672,12 +4648,10 @@ raw2_verify_fail:
 	B     raw2_clear64_from_verify
 
 raw2_clear16_from_verify:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, raw2_try16
 	CMP   $16, R12
 	BGE   raw2_loop16
@@ -4698,12 +4672,10 @@ raw2_clear32_from_verify:
 	B     raw2_loop16_entry
 
 raw2_clear64_from_verify:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, raw2_try64
 	ADD   $16, R20
 	CMP   $64, R20
