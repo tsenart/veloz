@@ -42,39 +42,35 @@ func IndexFoldModular(haystack, needle string) int {
 	}
 
 	// Use first + last byte (max spread), or first + middle if first==last
+	first := toLower(needle[0])
+	last := toLower(needle[n-1])
 	off2 := n - 1
-	if n > 2 && toLower(needle[0]) == toLower(needle[n-1]) {
+	if n > 2 && first == last {
 		off2 = n / 2
 	}
 
-	// Short needles: skip 1-byte stage, go directly to 2-byte filter
-	if n <= 16 {
-		result := indexFold2ByteRaw(haystack, needle, 0, off2)
+	// Decide strategy: skip 1-byte filter for pathological patterns
+	// Pathological patterns:
+	// 1. first == last (like "aab", quoted strings like "num")
+	// 2. first byte is a very common letter (a,e,i,o,u,t,n,s,r - top 9 by frequency)
+	skip1Byte := first == last || (first >= 'a' && first <= 'z' && byteRank[first] > 240)
+
+	var result uint64
+	var resumePos int
+
+	if !skip1Byte {
+		// Stage 1: 1-byte filter (fast scan, adaptive threshold)
+		result = indexFold1ByteRaw(haystack, needle, 0)
 		if !resultExceeded(result) {
 			return resultPosition(result)
 		}
-		resumePos := resultPosition(result)
+		resumePos = resultPosition(result)
 		if resumePos > 0 {
 			haystack = haystack[resumePos:]
 		}
-		pos := indexFoldRabinKarp(haystack, needle)
-		if pos >= 0 {
-			return pos + resumePos
-		}
-		return -1
 	}
 
-	// Long needles: 1-byte -> 2-byte -> RK
-	result := indexFold1ByteRaw(haystack, needle, 0)
-	if !resultExceeded(result) {
-		return resultPosition(result)
-	}
-
-	resumePos := resultPosition(result)
-	if resumePos > 0 {
-		haystack = haystack[resumePos:]
-	}
-
+	// Stage 2: 2-byte filter (more selective)
 	result = indexFold2ByteRaw(haystack, needle, 0, off2)
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
@@ -84,6 +80,7 @@ func IndexFoldModular(haystack, needle string) int {
 		return -1
 	}
 
+	// Stage 3: Rabin-Karp fallback
 	resumePos2 := resultPosition(result)
 	if resumePos2 > 0 {
 		haystack = haystack[resumePos2:]

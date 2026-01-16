@@ -1,19 +1,5 @@
 ## Biggest wins
 
-### 1) Move these kernels to ABIInternal (kill the ABI0 wrapper)
-
-Right now you load args from `FP` and store the return to `ret+…(FP)`. If these are called from Go, the toolchain emits wrappers (reg ABI ↔ stack ABI). That wrapper cost dominates small/medium inputs and pollutes I‑cache.
-
-Do this for every exported kernel:
-
-* Mark as `ABIInternal|NOFRAME` (or whatever flag set your Go version uses for internal ABI).
-* Take args directly in `R0..R7` (matches your own comment block).
-* Return in `R0` only; stop storing to `ret+…(FP)`.
-
-Net: fewer prologue loads/stores, no wrapper, smaller call footprint, better small‑input latency.
-
----
-
 ### 2) Stop loading the 2nd stream when `off2_delta` overlaps the first stream
 
 Your 2‑byte kernels are the biggest bandwidth sink: they read the haystack twice (`ptr1` and `ptr2=ptr1+delta`), even when the windows overlap heavily (common when `delta` is small, which happens for short needles and for “rare bytes” chosen close together).
@@ -24,14 +10,14 @@ Implement a **small‑delta path** that derives `ptr2` vectors from `ptr1` vecto
 
 Split `off2_delta` into:
 
-* `q = off2_delta >> 4` (whole vectors)
-* `r = off2_delta & 15` (byte shift within vector)
+- `q = off2_delta >> 4` (whole vectors)
+- `r = off2_delta & 15` (byte shift within vector)
 
 For a 64‑byte block, load **(4 + q + 1)** vectors from `ptr1` (one extra “next” vector for the final `EXT`). Then for each 16‑byte chunk `i` in 0..3:
 
-* Base vectors are `V[i+q]` and `V[i+q+1]`
-* `ptr2_chunk_i = EXT V[i+q], V[i+q+1], #r` when `r != 0`
-* If `r == 0`, `ptr2_chunk_i = V[i+q]` (zero permute cost)
+- Base vectors are `V[i+q]` and `V[i+q+1]`
+- `ptr2_chunk_i = EXT V[i+q], V[i+q+1], #r` when `r != 0`
+- If `r == 0`, `ptr2_chunk_i = V[i+q]` (zero permute cost)
 
 Then compare rare2 against `ptr2_chunk_i` and AND with rare1 compares.
 
@@ -81,20 +67,20 @@ Example pattern (exact1 64B loop):
 
 Current:
 
-* load `V1..V4`
-* compare into `V16..V19`
+- load `V1..V4`
+- compare into `V16..V19`
 
 Better:
 
-* load `V1..V4`
-* `VCMEQ …, V1, V1` (overwrite)
-* `VCMEQ …, V2, V2`
-* …
+- load `V1..V4`
+- `VCMEQ …, V1, V1` (overwrite)
+- `VCMEQ …, V2, V2`
+- …
 
 Same for the 128B loop: overwrite `V1..V4` and `V24..V27` (or whatever your load regs are) with compare results. Then:
 
-* syndrome extraction reads directly from those regs
-* you remove the 4× `VMOV` block in the “second64” path (`second64_exact1/2`) entirely by not shuffling registers to “unify processing”.
+- syndrome extraction reads directly from those regs
+- you remove the 4× `VMOV` block in the “second64” path (`second64_exact1/2`) entirely by not shuffling registers to “unify processing”.
 
 This reduces register pressure and removes vector moves on the match path, and it makes deeper unrolling/pipelining feasible later.
 
@@ -106,9 +92,9 @@ In your 128B loops you build the full `OR` tree, reduce to `R15`, then if `R15 !
 
 Keep `OR(first64)` and `OR(second64)` around from the first tree build:
 
-* compute `Vfirst = OR(V0..V3)` and `Vsecond = OR(V4..V7)`
-* compute `Vall = OR(Vfirst, Vsecond)` and reduce once for the loop continuation check
-* on the match path, reduce `Vfirst` first; only if zero reduce `Vsecond`
+- compute `Vfirst = OR(V0..V3)` and `Vsecond = OR(V4..V7)`
+- compute `Vall = OR(Vfirst, Vsecond)` and reduce once for the loop continuation check
+- on the match path, reduce `Vfirst` first; only if zero reduce `Vsecond`
 
 Net: remove ~6 `VORR` per taken-match path.
 
@@ -132,16 +118,16 @@ Keep scalar only for scanning the last <16 search positions, not for verifying.
 
 For ASCII fold with a **pre-normalized needle** (your `indexFold1Byte` / `indexFold2Byte`), you do expensive letter detection on **haystack** every 16 bytes:
 
-* build `(h|0x20)`
-* range check to decide if letter
-* selectively OR 0x20
+- build `(h|0x20)`
+- range check to decide if letter
+- selectively OR 0x20
 
 You don’t need haystack letter detection at all.
 
 Key property: for ASCII, `(x | 0x20)` only maps uppercase letters to lowercase; it cannot turn a non-letter into a lowercase letter. Therefore:
 
-* When the needle byte is a lowercase letter, OR’ing 0x20 into the haystack byte is always safe.
-* When the needle byte is not a letter, you must not OR.
+- When the needle byte is a lowercase letter, OR’ing 0x20 into the haystack byte is always safe.
+- When the needle byte is not a letter, you must not OR.
 
 So the per-byte OR mask depends on the needle byte only.
 
@@ -149,12 +135,12 @@ So the per-byte OR mask depends on the needle byte only.
 
 Per 16B chunk:
 
-* load `Vh` and `Vn` (needle is already normalized)
-* compute `needle_is_letter` via `(Vn + 159) < 26` (same trick you already use, just on `Vn`)
-* `Vmask = needle_is_letter & 0x20`
-* `Vh = Vh | Vmask`
-* `diff = Vh XOR Vn`
-* reduce `diff`
+- load `Vh` and `Vn` (needle is already normalized)
+- compute `needle_is_letter` via `(Vn + 159) < 26` (same trick you already use, just on `Vn`)
+- `Vmask = needle_is_letter & 0x20`
+- `Vh = Vh | Vmask`
+- `diff = Vh XOR Vn`
+- reduce `diff`
 
 This deletes the initial `VORR 0x20` and shifts work from haystack-dependent to needle-dependent.
 
@@ -162,10 +148,10 @@ This deletes the initial `VORR 0x20` and shifts work from haystack-dependent to 
 
 Precompute a per-byte `foldMask` array for the needle once (0x20 where needle byte is letter, 0x00 otherwise). Then verify per 16B chunk is:
 
-* load `Vh`, `Vn`, `Vm` (mask)
-* `Vh |= Vm`
-* `diff = Vh XOR Vn`
-* reduce
+- load `Vh`, `Vn`, `Vm` (mask)
+- `Vh |= Vm`
+- `diff = Vh XOR Vn`
+- reduce
 
 This replaces 3 ALU ops (`VADD`+`VCMHI`+`VAND`) with one extra load. For worst-cases with many candidate verifies, it wins.
 
@@ -177,15 +163,15 @@ Do **not** apply this to the Raw-fold variants; they need real dual-normalize lo
 
 Fold2/raw2 always do:
 
-* `VORR mask1, …` even when `mask1==0`
-* `VORR mask2, …` even when `mask2==0`
+- `VORR mask1, …` even when `mask1==0`
+- `VORR mask2, …` even when `mask2==0`
 
 Split into 4 scan variants decided once in setup:
 
-* `mask1=0, mask2=0` → call/use exact2 kernel (no folding at all)
-* `mask1=0, mask2=0x20` → fold only stream2
-* `mask1=0x20, mask2=0` → fold only stream1
-* both 0x20 → current path
+- `mask1=0, mask2=0` → call/use exact2 kernel (no folding at all)
+- `mask1=0, mask2=0x20` → fold only stream2
+- `mask1=0x20, mask2=0` → fold only stream1
+- both 0x20 → current path
 
 This removes 4–8 vector ops per 64B iteration when masks are zero (common in binary/non-text data and for punctuation-heavy needles).
 
@@ -199,8 +185,8 @@ For truly large scans (MB-scale), you’re latency/bandwidth bound.
 
 Insert prefetches in 128B loops:
 
-* `PRFM PLDL1KEEP, [ptr, #256]` (or #512; tune)
-* For dual-stream 2-byte fallback path, prefetch both pointers.
+- `PRFM PLDL1KEEP, [ptr, #256]` (or #512; tune)
+- For dual-stream 2-byte fallback path, prefetch both pointers.
 
 Prefer `PLDL1STRM` if the haystack is truly streaming and you don’t want to pollute cache, but keep it behind a size threshold so you don’t hurt mid-sized inputs.
 
@@ -210,9 +196,9 @@ Prefer `PLDL1STRM` if the haystack is truly streaming and you don’t want to po
 
 Use `PCALIGN $32` (or $64) immediately before:
 
-* `loop128_*`
-* `loop64_*`
-* the primary verify loops if they’re hit often in your workload
+- `loop128_*`
+- `loop64_*`
+- the primary verify loops if they’re hit often in your workload
 
 Then reorder labels so the hot scan loop body is contiguous and the cold match/verify/tail code is out-of-line later in the function. This reduces I‑cache misses and BTB noise.
 
@@ -224,8 +210,8 @@ Given the sheer size of `indexFold1Byte` / `Raw` variants, code layout is not op
 
 If you want to reduce the “syndrome extraction” cost when matches are frequent, implement a dot-product movemask:
 
-* shift compare mask to 0/1 bytes
-* `UDOT` with a constant weight vector to pack bits quickly
+- shift compare mask to 0/1 bytes
+- `UDOT` with a constant weight vector to pack bits quickly
 
 Gate it on `arm64` dotprod feature and keep the existing path as baseline.
 
