@@ -44,14 +44,19 @@ func IndexFoldModular(haystack, needle string) int {
 	// Use first + last byte (max spread), or first + middle if first==last
 	first := toLower(needle[0])
 	last := toLower(needle[n-1])
+
+	// Quick check for position-0 match - avoids SIMD setup overhead
+	if toLower(haystack[0]) == first && EqualFold(haystack[:n], needle) {
+		return 0
+	}
 	off2 := n - 1
 	if n > 2 && first == last {
 		off2 = n / 2
 	}
-	// Skip 1-byte filter for pathological patterns:
-	// - first byte is very common (rank > 240: space, e, t, a, i, n, s, o, l, r)
-	// - first == last AND first is moderately common (rank > 160: covers quotes)
-	skip1Byte := byteRank[first] > 240 || (first == last && byteRank[first] > 160)
+	// Skip 1-byte filter for pathological patterns, but only for larger inputs.
+	// For small inputs (< 4KB), always try Stage 1 - the overhead is minimal
+	// and the static byteRank table may not match the actual input distribution.
+	skip1Byte := len(haystack) >= 4096 && (byteRank[first] > 240 || (first == last && byteRank[first] > 160))
 
 	var result uint64
 	var resumePos int
@@ -102,6 +107,11 @@ func IndexExactModular(haystack, needle string) int {
 		return -1
 	}
 
+	// Quick check for position-0 match - avoids SIMD setup overhead
+	if haystack[0] == needle[0] && haystack[:n] == needle {
+		return 0
+	}
+
 	// Use first + last byte (max spread), or first + middle if first==last
 	first := needle[0]
 	last := needle[n-1]
@@ -109,10 +119,10 @@ func IndexExactModular(haystack, needle string) int {
 	if n > 2 && first == last {
 		off2 = n / 2
 	}
-	// Skip 1-byte filter for pathological patterns:
-	// - first byte is very common (rank > 240: space, e, t, a, i, n, s, o, l, r)
-	// - first == last AND first is moderately common (rank > 160: covers quotes)
-	skip1Byte := byteRank[first] > 240 || (first == last && byteRank[first] > 160)
+	// Skip 1-byte filter for pathological patterns, but only for larger inputs.
+	// For small inputs (< 4KB), always try Stage 1 - the overhead is minimal
+	// and the static byteRank table may not match the actual input distribution.
+	skip1Byte := len(haystack) >= 4096 && (byteRank[first] > 240 || (first == last && byteRank[first] > 160))
 
 	var result uint64
 	var resumePos int
