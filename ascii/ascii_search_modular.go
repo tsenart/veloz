@@ -48,10 +48,9 @@ func IndexFoldModular(haystack, needle string) int {
 	if n > 2 && first == last {
 		off2 = n / 2
 	}
-
 	// Skip 1-byte filter for pathological patterns:
-	// - first byte is very common (any byte type, not just letters)
-	// - first == last AND first is not rare (covers quotes at 164, common letters)
+	// - first byte is very common (rank > 240: space, e, t, a, i, n, s, o, l, r)
+	// - first == last AND first is moderately common (rank > 160: covers quotes)
 	skip1Byte := byteRank[first] > 240 || (first == last && byteRank[first] > 160)
 
 	var result uint64
@@ -110,10 +109,9 @@ func IndexExactModular(haystack, needle string) int {
 	if n > 2 && first == last {
 		off2 = n / 2
 	}
-
 	// Skip 1-byte filter for pathological patterns:
-	// - first byte is very common (any byte type, not just letters)
-	// - first == last AND first is not rare (covers quotes at 164, common letters)
+	// - first byte is very common (rank > 240: space, e, t, a, i, n, s, o, l, r)
+	// - first == last AND first is moderately common (rank > 160: covers quotes)
 	skip1Byte := byteRank[first] > 240 || (first == last && byteRank[first] > 160)
 
 	var result uint64

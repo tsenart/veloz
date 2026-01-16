@@ -67,6 +67,36 @@ func BenchmarkSearch(b *testing.B) {
 		{"needle3", "1KB", strings.Repeat("x", 1000) + "abc", "abc"},
 		{"needle8", "1KB", strings.Repeat("x", 1000) + "abcdefgh", "abcdefgh"},
 		{"needle16", "1KB", strings.Repeat("x", 1000) + "abcdefghijklmnop", "abcdefghijklmnop"},
+
+		// =============================================================================
+		// Edge cases for skip1Byte heuristic testing
+		// These test bytes below 240 threshold but very common in specific corpora
+		// =============================================================================
+
+		// Log timestamps: '2' (rank 204) is common in logs but below 240 threshold
+		// Should stress Stage 1 when searching for date patterns
+		{"logdate", "1KB", strings.Repeat("2024-01-15T10:30:45.123Z INFO Processing request\n", 20) + "2024-99-99", "2024-99"},
+		{"logdate", "64KB", strings.Repeat("2024-01-15T10:30:45.123Z INFO Processing request\n", 1280) + "2024-99-99", "2024-99"},
+
+		// Hex data: '0' (rank 208) and hex chars common in dumps
+		// Tests patterns starting with '0x' which should trigger Stage 1
+		{"hexdata", "1KB", strings.Repeat("0x0000 0x1234 0xABCD 0xFFFF\n", 35) + "0xDEAD", "0xDEAD"},
+		{"hexdata", "64KB", strings.Repeat("0x0000 0x1234 0xABCD 0xFFFF\n", 2275) + "0xDEAD", "0xDEAD"},
+
+		// Code-like text: '{' (rank 182) common in code, 'c' (rank 238) just below 240
+		// Tests brace-heavy patterns
+		{"codebraces", "1KB", strings.Repeat("{\"key\": \"value\"}\n", 60) + "{NOTFOUND}", "{NOTFOUND}"},
+		{"codebraces", "64KB", strings.Repeat("{\"key\": \"value\"}\n", 3840) + "{NOTFOUND}", "{NOTFOUND}"},
+
+		// DNA sequences: 'A', 'T', 'C', 'G' with varying corpus distributions
+		// 'A' (rank 191), 'T' (rank 188), 'C' (rank 194), 'G' (rank 161) - all below threshold
+		{"dna", "1KB", strings.Repeat("ATCGATCGATCG", 83) + "ZZZZZ", "ZZZZZ"},
+		{"dna", "64KB", strings.Repeat("ATCGATCGATCG", 5333) + "ZZZZZ", "ZZZZZ"},
+
+		// Digits-heavy: searching in numeric data where digits are common
+		// Tests '1' (rank 220) at start - just below 240 threshold
+		{"digits", "1KB", strings.Repeat("123456789012345678901234567890\n", 32) + "1999999", "1999999"},
+		{"digits", "64KB", strings.Repeat("123456789012345678901234567890\n", 2065) + "1999999", "1999999"},
 	}
 
 	// Case-sensitive implementations
