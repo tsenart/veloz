@@ -43,31 +43,37 @@ func IndexFoldModular(haystack, needle string) int {
 		return -1
 	}
 
-	// Use fixed positions: first byte and middle byte (or last if too short)
+	// Use fixed positions: first byte and last byte (maximum spread)
+	// Fall back to middle byte if first==last (e.g., quoted strings like "num")
 	off1 := 0
 	off2 := n - 1
-	if n > 2 {
+	if n > 2 && toLower(needle[0]) == toLower(needle[n-1]) {
 		off2 = n / 2
-		// If middle byte matches first, try last byte instead (handles "aab" pattern)
-		if toLower(needle[off1]) == toLower(needle[off2]) {
-			off2 = n - 1
+	}
+
+	var result uint64
+	var resumePos int
+
+	// For short needles, skip 1-byte stage (overhead not worth it)
+	// For longer needles, 1-byte filter helps reduce false positives
+	if n <= 16 {
+		result = indexFold2ByteRaw(haystack, needle, off1, off2-off1)
+	} else {
+		// Stage 1: 1-byte filter
+		result = indexFold1ByteRaw(haystack, needle, off1)
+
+		if !resultExceeded(result) {
+			return resultPosition(result)
 		}
+
+		// Stage 2: 2-byte filter
+		resumePos = resultPosition(result)
+		if resumePos > 0 {
+			haystack = haystack[resumePos:]
+		}
+
+		result = indexFold2ByteRaw(haystack, needle, off1, off2-off1)
 	}
-
-	// Stage 1: 1-byte filter
-	result := indexFold1ByteRaw(haystack, needle, off1)
-
-	if !resultExceeded(result) {
-		return resultPosition(result)
-	}
-
-	// Stage 2: 2-byte filter
-	resumePos := resultPosition(result)
-	if resumePos > 0 {
-		haystack = haystack[resumePos:]
-	}
-
-	result = indexFold2ByteRaw(haystack, needle, off1, off2-off1)
 
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
@@ -101,31 +107,37 @@ func IndexExactModular(haystack, needle string) int {
 		return -1
 	}
 
-	// Use fixed positions: first byte and middle byte (or last if too short)
+	// Use fixed positions: first byte and last byte (maximum spread)
+	// Fall back to middle byte if first==last (e.g., quoted strings like "num")
 	off1 := 0
 	off2 := n - 1
-	if n > 2 {
+	if n > 2 && needle[0] == needle[n-1] {
 		off2 = n / 2
-		// If middle byte matches first, try last byte instead (handles "aab" pattern)
-		if needle[off1] == needle[off2] {
-			off2 = n - 1
+	}
+
+	var result uint64
+	var resumePos int
+
+	// For short needles, skip 1-byte stage (overhead not worth it)
+	// For longer needles, 1-byte filter helps reduce false positives
+	if n <= 16 {
+		result = indexExact2Byte(haystack, needle, off1, off2-off1)
+	} else {
+		// Stage 1: 1-byte filter
+		result = indexExact1Byte(haystack, needle, off1)
+
+		if !resultExceeded(result) {
+			return resultPosition(result)
 		}
+
+		// Stage 2: 2-byte filter
+		resumePos = resultPosition(result)
+		if resumePos > 0 {
+			haystack = haystack[resumePos:]
+		}
+
+		result = indexExact2Byte(haystack, needle, off1, off2-off1)
 	}
-
-	// Stage 1: 1-byte filter
-	result := indexExact1Byte(haystack, needle, off1)
-
-	if !resultExceeded(result) {
-		return resultPosition(result)
-	}
-
-	// Stage 2: 2-byte filter
-	resumePos := resultPosition(result)
-	if resumePos > 0 {
-		haystack = haystack[resumePos:]
-	}
-
-	result = indexExact2Byte(haystack, needle, off1, off2-off1)
 
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
