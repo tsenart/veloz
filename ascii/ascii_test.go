@@ -863,11 +863,6 @@ func FuzzIndexFold(f *testing.F) {
 		if rkGoRes != want {
 			t.Fatalf("indexFoldRabinKarpGo(%q, %q) = %v; want %v", istr, isubstr, rkGoRes, want)
 		}
-
-		modRes := IndexFold(istr, isubstr)
-		if modRes != want {
-			t.Fatalf("IndexFold(%q, %q) = %v; want %v", istr, isubstr, modRes, want)
-		}
 	})
 }
 
@@ -1347,69 +1342,6 @@ func TestMatchAtStart(t *testing.T) {
 	}
 }
 
-func BenchmarkSearchNeedle(b *testing.B) {
-	// Benchmark full-scan performance with needle at END of haystack.
-	// This measures actual throughput, not "time to first match".
-
-	const size = 4700
-
-	// JSON case: searching for a key in JSON-like data
-	// Before fix: would pick "@0 and "@4 (same byte) -> many false positives
-	// After fix: picks "@0 and M@3 (different bytes) -> fewer false positives
-	jsonNeedle := `"num"`
-	jsonN := NewSearcher(jsonNeedle, false)
-	jsonHaystack := strings.Repeat(`{"key":"value","cnt":123},`, size/26) + `{"num":999}`
-
-	b.Run("json/IndexFold", func(b *testing.B) {
-		b.SetBytes(int64(len(jsonHaystack)))
-		for i := 0; i < b.N; i++ {
-			IndexFold(jsonHaystack, jsonNeedle)
-		}
-	})
-
-	b.Run("json/SearchNeedle", func(b *testing.B) {
-		b.SetBytes(int64(len(jsonHaystack)))
-		for i := 0; i < b.N; i++ {
-			jsonN.Index(jsonHaystack)
-		}
-	})
-
-	// Zero false-positive case: needle "quartz" (Q, Z rare), haystack has no Q or Z
-	zeroFPNeedle := "quartz"
-	zeroFPN := NewSearcher(zeroFPNeedle, false)
-	zeroFPHaystack := strings.Repeat("abcdefghijklmnoprstuvwy ", size/24) + zeroFPNeedle
-	b.Run("rare/IndexFold", func(b *testing.B) {
-		b.SetBytes(int64(len(zeroFPHaystack)))
-		for i := 0; i < b.N; i++ {
-			IndexFold(zeroFPHaystack, zeroFPNeedle)
-		}
-	})
-
-	b.Run("rare/SearchNeedle", func(b *testing.B) {
-		b.SetBytes(int64(len(zeroFPHaystack)))
-		for i := 0; i < b.N; i++ {
-			zeroFPN.Index(zeroFPHaystack)
-		}
-	})
-
-	// Not-found case (full scan)
-	notFoundHaystack := strings.Repeat("abcdefghijklmnoprstuvwy ", size/24)
-	b.Run("notfound/IndexFold", func(b *testing.B) {
-		b.SetBytes(int64(len(notFoundHaystack)))
-		for i := 0; i < b.N; i++ {
-			IndexFold(notFoundHaystack, zeroFPNeedle)
-		}
-	})
-
-	b.Run("notfound/SearchNeedle", func(b *testing.B) {
-		b.SetBytes(int64(len(notFoundHaystack)))
-		for i := 0; i < b.N; i++ {
-			zeroFPN.Index(notFoundHaystack)
-		}
-	})
-
-}
-
 // BenchmarkNeedleReuse demonstrates the advantage of precomputing Needle once
 // and reusing it across many haystacks (typical database/log search use case).
 func BenchmarkNeedleReuse(b *testing.B) {
@@ -1645,48 +1577,8 @@ func buildRankTable(corpus string) [256]byte {
 	return ranks
 }
 
-func FuzzSearcherCaseInsensitive(f *testing.F) {
-	f.Add("hello world", "world")
-	f.Add("The Quick Brown Fox", "quick")
-	f.Add(strings.Repeat("a", 100), "aaa")
-	f.Add("xylophone", "xy")
-
-	// Bug regression seeds - these target specific edge cases
-	// Bug 1: Multiple rare-byte matches in same 16-byte chunk (tests nibble clearing)
-	f.Add("xQxZxQxZxQxZQZab", "QZab")
-	f.Add("QxZxQxZxQxZxQxZxQZmatch", "QZmatch")
-	// Bug 2: Match in tail region after SIMD loop (tests tail masking)
-	f.Add(strings.Repeat("x", 20)+"needle", "needle")
-	f.Add(strings.Repeat("x", 17)+"QZ", "QZ")
-	f.Add(strings.Repeat("y", 31)+"z", "z")
-	// Combined: multiple candidates AND in tail
-	f.Add(strings.Repeat("QZ", 8)+"xQZmatch", "QZmatch")
-	// Non-ASCII seeds
-	f.Add("\x80ABC", "abc")
-	f.Add(strings.Repeat("\x80", 100)+"needle", "NEEDLE")
-	f.Add("abc\x80def", "\x80d")
-	// 2-byte mode forcing: rare1 common in haystack, rare2 absent
-	f.Add(strings.Repeat("Q", 1000), "Q"+strings.Repeat("a", 30)+"Z")
-	f.Add(strings.Repeat("Q", 1000)+"Q"+strings.Repeat("a", 30)+"Z", "Q"+strings.Repeat("a", 30)+"Z")
-
-	f.Fuzz(func(t *testing.T, haystack, needle string) {
-		n := NewSearcher(needle, false)
-		got := n.Index(haystack)
-		want := indexFoldGo(haystack, needle)
-		if got != want {
-			t.Fatalf("%q.Index(%q) = %d, want %d", haystack, needle, got, want)
-		}
-		// Cross-validate with IndexFold
-		ifRes := IndexFold(haystack, needle)
-		if got != ifRes {
-			t.Fatalf("SearchNeedle vs IndexFold mismatch: %q.Index(%q) = %d, IndexFold = %d",
-				haystack, needle, got, ifRes)
-		}
-	})
-}
-
-// FuzzSearcherCaseSensitive tests case-sensitive Searcher against strings.Index
-func FuzzSearcherCaseSensitive(f *testing.F) {
+// FuzzIndex tests case-sensitive Index and Searcher against strings.Index
+func FuzzIndex(f *testing.F) {
 	f.Add("hello world", "world")
 	f.Add("The Quick Brown Fox", "Quick")
 	f.Add(strings.Repeat("a", 100), "aaa")
