@@ -32,7 +32,7 @@ func resultPosition(r uint64) int {
 }
 
 // IndexFoldModular performs case-insensitive substring search using staged kernels.
-// Uses first byte for stage 1, then middle/last byte for stage 2 if needed.
+// Uses fixed positions for normal needles, selectRarePairSample only for pathological cases.
 // Uses Raw variants that fold needle on-the-fly (no normalizeASCII overhead).
 func IndexFoldModular(haystack, needle string) int {
 	n := len(needle)
@@ -43,19 +43,25 @@ func IndexFoldModular(haystack, needle string) int {
 		return -1
 	}
 
-	// Stage 1: 1-byte filter on first byte (Raw: folds needle on-the-fly)
+	// Use fixed positions: first byte and middle byte (or last if too short)
 	off1 := 0
+	off2 := n - 1
+	if n > 2 {
+		off2 = n / 2
+		// If middle byte matches first, try last byte instead (handles "aab" pattern)
+		if toLower(needle[off1]) == toLower(needle[off2]) {
+			off2 = n - 1
+		}
+	}
+
+	// Stage 1: 1-byte filter
 	result := indexFold1ByteRaw(haystack, needle, off1)
 
 	if !resultExceeded(result) {
 		return resultPosition(result)
 	}
 
-	// Stage 2: 2-byte filter, pick second byte from middle or end
-	off2 := n - 1
-	if n > 2 {
-		off2 = n / 2
-	}
+	// Stage 2: 2-byte filter
 	resumePos := resultPosition(result)
 	if resumePos > 0 {
 		haystack = haystack[resumePos:]
@@ -95,8 +101,18 @@ func IndexExactModular(haystack, needle string) int {
 		return -1
 	}
 
-	// Stage 1: 1-byte filter on first byte
+	// Use fixed positions: first byte and middle byte (or last if too short)
 	off1 := 0
+	off2 := n - 1
+	if n > 2 {
+		off2 = n / 2
+		// If middle byte matches first, try last byte instead (handles "aab" pattern)
+		if needle[off1] == needle[off2] {
+			off2 = n - 1
+		}
+	}
+
+	// Stage 1: 1-byte filter
 	result := indexExact1Byte(haystack, needle, off1)
 
 	if !resultExceeded(result) {
@@ -104,10 +120,6 @@ func IndexExactModular(haystack, needle string) int {
 	}
 
 	// Stage 2: 2-byte filter
-	off2 := n - 1
-	if n > 2 {
-		off2 = n / 2
-	}
 	resumePos := resultPosition(result)
 	if resumePos > 0 {
 		haystack = haystack[resumePos:]
