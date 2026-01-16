@@ -174,12 +174,10 @@ fail64_exact1:
 	BGE    exceeded64_exact1
 
 clear64_exact1:
-	ADD    $1, R17, R20
-	LSL    $1, R20, R20
+	LSL    $1, R17, R20            // bitpos = byteIndex << 1
 	MOVD   $1, R21
-	LSL    R20, R21, R20
-	SUB    $1, R20
-	BIC    R20, R15, R15
+	LSL    R20, R21, R20           // 1 << bitpos
+	BIC    R20, R15, R15           // Clear just that bit
 	CBNZ   R15, process_match64_exact1
 
 next_chunk64_exact1:
@@ -285,12 +283,10 @@ fail32_exact1:
 	BGE   exceeded_exact1
 
 clear_bit32_exact1:
-	ADD   $1, R16, R19
-	LSL   $1, R19, R19
+	LSL   $1, R16, R19             // bitpos = byteIndex << 1
 	MOVD  $1, R20
-	LSL   R19, R20, R19
-	SUB   $1, R19
-	BIC   R19, R15, R15
+	LSL   R19, R20, R19            // 1 << bitpos
+	BIC   R19, R15, R15            // Clear just that bit
 	CBNZ  R15, process_syndrome32_exact1
 	// No more matches in this 32-byte chunk - fall through to 16-byte or scalar loop
 
@@ -365,12 +361,10 @@ fail16_exact1:
 	BGE   exceeded_exact1
 
 clear16_exact1:
-	ADD   $1, R16, R19
-	LSL   $1, R19, R19
+	LSL   $1, R16, R19             // bitpos = byteIndex << 1
 	MOVD  $1, R20
-	LSL   R19, R20, R19
-	SUB   $1, R19
-	BIC   R19, R15, R15
+	LSL   R19, R20, R19            // 1 << bitpos
+	BIC   R19, R15, R15            // Clear just that bit
 	CBNZ  R15, process16_exact1
 	CMP   $16, R10
 	BGE   loop16_inner_exact1
@@ -604,12 +598,10 @@ fail64_exact2:
 	BGE   exceeded64_exact2
 
 clear64_exact2:
-	ADD   $1, R17, R20
-	LSL   $1, R20, R20
+	LSL   $1, R17, R20             // bitpos = byteIndex << 1
 	MOVD  $1, R21
-	LSL   R20, R21, R20
-	SUB   $1, R20
-	BIC   R20, R15, R15
+	LSL   R20, R21, R20            // 1 << bitpos
+	BIC   R20, R15, R15            // Clear just that bit
 	CBNZ  R15, process_match64_exact2
 
 next_chunk64_exact2:
@@ -702,12 +694,10 @@ fail16_exact2:
 	BGE   exceeded16_exact2
 
 clear16_exact2:
-	ADD   $1, R17, R20
-	LSL   $1, R20, R20
+	LSL   $1, R17, R20             // bitpos = byteIndex << 1
 	MOVD  $1, R21
-	LSL   R20, R21, R20
-	SUB   $1, R20
-	BIC   R20, R15, R15
+	LSL   R20, R21, R20            // 1 << bitpos
+	BIC   R20, R15, R15            // Clear just that bit
 	CBNZ  R15, process16_exact2
 	CMP   $16, R10
 	BGE   loop16_inner_exact2
@@ -955,14 +945,12 @@ fold1_try32:
 	B     fold1_verify
 
 fold1_clear32:
-	AND   $0x7F, R14, R17
-	ADD   $1, R15, R20
-	SUB   R17, R20, R20
-	LSL   $1, R20, R20
+	AND   $0x7F, R14, R17          // chunk offset (0 or 16)
+	SUB   R17, R15, R20            // byte index within chunk
+	LSL   $1, R20, R20             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R20, R19, R20
-	SUB   $1, R20, R20
-	BIC   R20, R13, R13
+	LSL   R20, R19, R20            // 1 << bitpos
+	BIC   R20, R13, R13            // Clear just that bit
 	CBNZ  R13, fold1_try32
 
 	// Move to chunk 1 if in chunk 0
@@ -1128,13 +1116,11 @@ fold1_try128:
 	B     fold1_verify
 
 fold1_clear128:
-	ADD   $1, R15, R17
-	SUB   R14, R17, R17
-	LSL   $1, R17, R17
+	SUB   R14, R15, R17            // byte index within chunk
+	LSL   $1, R17, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, fold1_try128
 
 	ADD   $16, R14, R14
@@ -1236,14 +1222,12 @@ fold1_try32_nl:
 	B     fold1_verify
 
 fold1_clear32_nl:
-	AND   $0x7F, R14, R17
-	ADD   $1, R15, R20
-	SUB   R17, R20, R20
-	LSL   $1, R20, R20
+	AND   $0x7F, R14, R17          // chunk offset (0 or 16)
+	SUB   R17, R15, R20            // byte index within chunk
+	LSL   $1, R20, R20             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R20, R19, R20
-	SUB   $1, R20, R20
-	BIC   R20, R13, R13
+	LSL   R20, R19, R20            // 1 << bitpos
+	BIC   R20, R13, R13            // Clear just that bit
 	CBNZ  R13, fold1_try32_nl
 
 	CMP   $128, R14
@@ -1391,13 +1375,11 @@ fold1_try128_nl:
 	B     fold1_verify
 
 fold1_clear128_nl:
-	ADD   $1, R15, R17
-	SUB   R14, R17, R17
-	LSL   $1, R17, R17
+	SUB   R14, R15, R17            // byte index within chunk
+	LSL   $1, R17, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, fold1_try128_nl
 
 	ADD   $16, R14, R14
@@ -1471,12 +1453,10 @@ fold1_try16:
 	B     fold1_verify
 
 fold1_clear16:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, fold1_try16
 
 fold1_check16_continue:
@@ -1589,14 +1569,13 @@ fold1_scalar_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	VEOR  V10.B16, V11.B16, V12.B16
-	VCMEQ V8.B16, V12.B16, V14.B16
-	VORR  V8.B16, V10.B16, V13.B16
-	VADD  V4.B16, V13.B16, V13.B16
-	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16
-	VAND  V14.B16, V13.B16, V13.B16
-	VAND  V8.B16, V13.B16, V13.B16
-	VEOR  V13.B16, V12.B16, V10.B16
+	// Normalize haystack then compare with pre-normalized needle
+	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
+	VADD  V4.B16, V13.B16, V14.B16  // V14 = (h|0x20) + 159
+	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (is_letter mask)
+	VAND  V8.B16, V14.B16, V14.B16  // V14 = is_letter ? 0x20 : 0
+	VORR  V14.B16, V10.B16, V10.B16 // V10 = h_norm
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, fold1_scalar_vloop
@@ -1608,17 +1587,16 @@ fold1_scalar_vtail:
 
 	VLD1  (R21), [V10.B16]
 	VLD1  (R22), [V11.B16]
-	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
+	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4] - tail mask
 
-	VEOR  V10.B16, V11.B16, V12.B16
-	VCMEQ V8.B16, V12.B16, V14.B16
-	VORR  V8.B16, V10.B16, V15.B16
-	VADD  V4.B16, V15.B16, V15.B16
-	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16
-	VAND  V14.B16, V15.B16, V15.B16
-	VAND  V8.B16, V15.B16, V15.B16
-	VEOR  V15.B16, V12.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16
+	// Normalize haystack then compare with pre-normalized needle
+	VORR  V8.B16, V10.B16, V14.B16  // V14 = h | 0x20
+	VADD  V4.B16, V14.B16, V15.B16  // V15 = (h|0x20) + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is_letter mask)
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = is_letter ? 0x20 : 0
+	VORR  V15.B16, V10.B16, V10.B16 // V10 = h_norm
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	VAND  V13.B16, V10.B16, V10.B16 // Mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, fold1_scalar_verify_fail
@@ -1706,15 +1684,13 @@ fold1_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	// Case-insensitive compare: XOR + check if diff is 0x20 for letters
-	VEOR  V10.B16, V11.B16, V12.B16 // V12 = XOR diff
-	VCMEQ V8.B16, V12.B16, V14.B16  // V14 = (XOR == 0x20)
-	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20 (force lowercase)
-	VADD  V4.B16, V13.B16, V13.B16  // V13 = (h|0x20) + 159 (-97)
-	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16 (is letter: <26)
-	VAND  V14.B16, V13.B16, V13.B16 // Both conditions: XOR==0x20 && is_letter
-	VAND  V8.B16, V13.B16, V13.B16  // V13 = mask ? 0x20 : 0
-	VEOR  V13.B16, V12.B16, V10.B16 // Mask out case difference
+	// Normalize haystack then compare with pre-normalized needle
+	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
+	VADD  V4.B16, V13.B16, V14.B16  // V14 = (h|0x20) + 159
+	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (is_letter mask)
+	VAND  V8.B16, V14.B16, V14.B16  // V14 = is_letter ? 0x20 : 0
+	VORR  V14.B16, V10.B16, V10.B16 // V10 = h_norm (lowercase letters)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10 (any non-zero?)
 	FMOVS F10, R23
 	CBZW  R23, fold1_vloop
@@ -1726,16 +1702,15 @@ fold1_vtail:
 
 	VLD1  (R21), [V10.B16]
 	VLD1  (R22), [V11.B16]
-	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
+	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4] - tail mask
 
-	VEOR  V10.B16, V11.B16, V12.B16
-	VCMEQ V8.B16, V12.B16, V14.B16
-	VORR  V8.B16, V10.B16, V15.B16
-	VADD  V4.B16, V15.B16, V15.B16
-	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16
-	VAND  V14.B16, V15.B16, V15.B16
-	VAND  V8.B16, V15.B16, V15.B16
-	VEOR  V15.B16, V12.B16, V10.B16
+	// Normalize haystack then compare with pre-normalized needle
+	VORR  V8.B16, V10.B16, V14.B16  // V14 = h | 0x20
+	VADD  V4.B16, V14.B16, V15.B16  // V15 = (h|0x20) + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is_letter mask)
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = is_letter ? 0x20 : 0
+	VORR  V15.B16, V10.B16, V10.B16 // V10 = h_norm
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
 	VAND  V13.B16, V10.B16, V10.B16 // Mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
@@ -1759,12 +1734,10 @@ fold1_verify_fail:
 	B     fold1_clear32_from_verify
 
 fold1_clear16_from_verify:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBZ   R26, fold1_clear16_nl_from_verify
 	CBNZ  R13, fold1_try16
 	B     fold1_check16_continue
@@ -1774,13 +1747,11 @@ fold1_clear16_nl_from_verify:
 	B     fold1_check16_nl_continue
 
 fold1_clear128_from_verify:
-	ADD   $1, R15, R17
-	SUB   R14, R17, R17
-	LSL   $1, R17, R17
+	SUB   R14, R15, R17            // byte index within chunk
+	LSL   $1, R17, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBZ   R26, fold1_try128_nl_retry
 	CBNZ  R13, fold1_try128
 	ADD   $16, R14, R14
@@ -1798,14 +1769,12 @@ fold1_try128_nl_retry:
 	B     fold1_continue128_nl
 
 fold1_clear32_from_verify:
-	AND   $0x7F, R14, R17
-	ADD   $1, R15, R20
-	SUB   R17, R20, R20
-	LSL   $1, R20, R20
+	AND   $0x7F, R14, R17          // chunk offset (0 or 16)
+	SUB   R17, R15, R20            // byte index within chunk
+	LSL   $1, R20, R20             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R20, R19, R20
-	SUB   $1, R20, R20
-	BIC   R20, R13, R13
+	LSL   R20, R19, R20            // 1 << bitpos
+	BIC   R20, R13, R13            // Clear just that bit
 	CBZ   R26, fold1_try32_nl_retry
 	CBNZ  R13, fold1_try32
 	CMP   $128, R14
@@ -2067,12 +2036,10 @@ fold2_try64:
 	B     fold2_verify
 
 fold2_clear64:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, fold2_try64
 
 fold2_next_chunk64:
@@ -2131,12 +2098,10 @@ fold2_try16:
 	B     fold2_verify
 
 fold2_clear16:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, fold2_try16
 	CMP   $16, R12
 	BGE   fold2_loop16
@@ -2193,15 +2158,13 @@ fold2_scalar_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	// Case-insensitive compare: XOR + check if diff is 0x20 for letters
-	VEOR  V10.B16, V11.B16, V12.B16
-	VCMEQ V8.B16, V12.B16, V14.B16
-	VORR  V8.B16, V10.B16, V13.B16
-	VADD  V4.B16, V13.B16, V13.B16
-	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16
-	VAND  V14.B16, V13.B16, V13.B16
-	VAND  V8.B16, V13.B16, V13.B16
-	VEOR  V13.B16, V12.B16, V10.B16
+	// Normalize haystack then compare with pre-normalized needle
+	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
+	VADD  V4.B16, V13.B16, V14.B16  // V14 = (h|0x20) + 159
+	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (is_letter mask)
+	VAND  V8.B16, V14.B16, V14.B16  // V14 = is_letter ? 0x20 : 0
+	VORR  V14.B16, V10.B16, V10.B16 // V10 = h_norm
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, fold2_scalar_vloop
@@ -2213,17 +2176,16 @@ fold2_scalar_vtail:
 
 	VLD1  (R21), [V10.B16]
 	VLD1  (R22), [V11.B16]
-	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
+	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4] - tail mask
 
-	VEOR  V10.B16, V11.B16, V12.B16
-	VCMEQ V8.B16, V12.B16, V14.B16
-	VORR  V8.B16, V10.B16, V15.B16
-	VADD  V4.B16, V15.B16, V15.B16
-	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16
-	VAND  V14.B16, V15.B16, V15.B16
-	VAND  V8.B16, V15.B16, V15.B16
-	VEOR  V15.B16, V12.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16
+	// Normalize haystack then compare with pre-normalized needle
+	VORR  V8.B16, V10.B16, V14.B16  // V14 = h | 0x20
+	VADD  V4.B16, V14.B16, V15.B16  // V15 = (h|0x20) + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is_letter mask)
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = is_letter ? 0x20 : 0
+	VORR  V15.B16, V10.B16, V10.B16 // V10 = h_norm
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	VAND  V13.B16, V10.B16, V10.B16 // Mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, fold2_scalar_verify_fail
@@ -2254,14 +2216,13 @@ fold2_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	VEOR  V10.B16, V11.B16, V12.B16
-	VCMEQ V8.B16, V12.B16, V14.B16
-	VORR  V8.B16, V10.B16, V13.B16
-	VADD  V4.B16, V13.B16, V13.B16
-	WORD  $0x6e2d34ed               // VCMHI V13.B16, V7.B16, V13.B16
-	VAND  V14.B16, V13.B16, V13.B16
-	VAND  V8.B16, V13.B16, V13.B16
-	VEOR  V13.B16, V12.B16, V10.B16
+	// Normalize haystack then compare with pre-normalized needle
+	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
+	VADD  V4.B16, V13.B16, V14.B16  // V14 = (h|0x20) + 159
+	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (is_letter mask)
+	VAND  V8.B16, V14.B16, V14.B16  // V14 = is_letter ? 0x20 : 0
+	VORR  V14.B16, V10.B16, V10.B16 // V10 = h_norm
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, fold2_vloop
@@ -2273,17 +2234,16 @@ fold2_vtail:
 
 	VLD1  (R21), [V10.B16]
 	VLD1  (R22), [V11.B16]
-	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4]
+	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4] - tail mask
 
-	VEOR  V10.B16, V11.B16, V12.B16
-	VCMEQ V8.B16, V12.B16, V14.B16
-	VORR  V8.B16, V10.B16, V15.B16
-	VADD  V4.B16, V15.B16, V15.B16
-	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16
-	VAND  V14.B16, V15.B16, V15.B16
-	VAND  V8.B16, V15.B16, V15.B16
-	VEOR  V15.B16, V12.B16, V10.B16
-	VAND  V13.B16, V10.B16, V10.B16
+	// Normalize haystack then compare with pre-normalized needle
+	VORR  V8.B16, V10.B16, V14.B16  // V14 = h | 0x20
+	VADD  V4.B16, V14.B16, V15.B16  // V15 = (h|0x20) + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is_letter mask)
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = is_letter ? 0x20 : 0
+	VORR  V15.B16, V10.B16, V10.B16 // V10 = h_norm
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	VAND  V13.B16, V10.B16, V10.B16 // Mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBNZW R23, fold2_verify_fail
@@ -2303,24 +2263,20 @@ fold2_verify_fail:
 	B     fold2_clear64_from_verify
 
 fold2_clear16_from_verify:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, fold2_try16
 	CMP   $16, R12
 	BGE   fold2_loop16
 	B     fold2_scalar_entry
 
 fold2_clear64_from_verify:
-	ADD   $1, R15, R17
-	LSL   $1, R17, R17
+	LSL   $1, R15, R17             // bitpos = byteIndex << 1
 	MOVD  $1, R19
-	LSL   R17, R19, R17
-	SUB   $1, R17
-	BIC   R17, R13, R13
+	LSL   R17, R19, R17            // 1 << bitpos
+	BIC   R17, R13, R13            // Clear just that bit
 	CBNZ  R13, fold2_try64
 	ADD   $16, R20
 	CMP   $64, R20
