@@ -183,16 +183,35 @@ func indexFoldModularWithOffsets(haystack, normNeedle string, off1, off2 int) in
 		return -1
 	}
 
-	// Stage 3: Rabin-Karp
+	// Stage 3: Fallback
 	resumePos2 := resultPosition(result)
 	if resumePos2 > 0 {
 		haystack = haystack[resumePos2:]
 		resumePos += resumePos2
 	}
 
-	pos := indexFoldRabinKarp(haystack, normNeedle)
+	// For short needles, use brute-force (faster than RK setup)
+	// For long needles, use SIMD Rabin-Karp
+	var pos int
+	if len(normNeedle) <= 8 {
+		pos = indexFoldBruteForce(haystack, normNeedle)
+	} else {
+		pos = indexFoldRabinKarp(haystack, normNeedle)
+	}
 	if pos >= 0 {
 		return pos + resumePos
+	}
+	return -1
+}
+
+// indexFoldBruteForce is a simple brute-force case-insensitive search.
+// Faster than Rabin-Karp for short needles due to lower setup overhead.
+func indexFoldBruteForce(haystack, normNeedle string) int {
+	n := len(normNeedle)
+	for i := 0; i <= len(haystack)-n; i++ {
+		if EqualFold(haystack[i:i+n], normNeedle) {
+			return i
+		}
 	}
 	return -1
 }
@@ -221,14 +240,21 @@ func indexExactModularWithOffsets(haystack, needle string, off1, off2 int) int {
 		return -1
 	}
 
-	// Stage 3: Rabin-Karp
+	// Stage 3: Fallback
 	resumePos2 := resultPosition(result)
 	if resumePos2 > 0 {
 		haystack = haystack[resumePos2:]
 		resumePos += resumePos2
 	}
 
-	pos := indexExactRabinKarp(haystack, needle)
+	// For short needles, use stdlib's brute-force (faster than RK)
+	// For long needles, use SIMD Rabin-Karp
+	var pos int
+	if len(needle) <= 8 {
+		pos = strings.Index(haystack, needle)
+	} else {
+		pos = indexExactRabinKarp(haystack, needle)
+	}
 	if pos >= 0 {
 		return pos + resumePos
 	}
