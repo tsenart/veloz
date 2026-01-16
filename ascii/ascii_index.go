@@ -74,10 +74,20 @@ func IndexFold(haystack, needle string) int {
 	if n > 2 && first == last {
 		off2 = n / 2
 	}
+
+	// For long needles with common filter bytes, use Rabin-Karp directly.
+	// Byte filtering degrades to O(n*m) when filter bytes match frequently.
+	// Rabin-Karp maintains O(n+m) with rolling hash.
+	filterByte2 := toLower(needle[off2])
+	if n > 64 && byteRank[first] > 180 && byteRank[filterByte2] > 180 {
+		return indexFoldRabinKarp(haystack, needle)
+	}
+
 	// Skip 1-byte filter for pathological patterns:
 	// - first byte is very common (rank > 240: space, e, t, a, i, n, s, o, l, r)
 	// - first == last AND first is moderately common (rank > 160: covers quotes)
-	skip1Byte := byteRank[first] > 240 || (first == last && byteRank[first] > 160)
+	// - small inputs (< 2KB): 2-byte filter is more robust against corpus-specific pathological cases
+	skip1Byte := len(haystack) < 2048 || byteRank[first] > 240 || (first == last && byteRank[first] > 160)
 
 	var result uint64
 	var resumePos int
@@ -141,6 +151,14 @@ func Index(haystack, needle string) int {
 	if n > 2 && first == last {
 		off2 = n / 2
 	}
+
+	// For long needles with common filter bytes, use Rabin-Karp directly.
+	// Byte filtering degrades to O(n*m) when filter bytes match frequently.
+	// Rabin-Karp maintains O(n+m) with rolling hash.
+	if n > 64 && byteRank[first] > 180 && byteRank[needle[off2]] > 180 {
+		return indexExactRabinKarp(haystack, needle)
+	}
+
 	// Skip 1-byte filter for pathological patterns:
 	// - first byte is very common (rank > 240: space, e, t, a, i, n, s, o, l, r)
 	// - first == last AND first is moderately common (rank > 160: covers quotes)
