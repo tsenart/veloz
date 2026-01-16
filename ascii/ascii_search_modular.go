@@ -32,8 +32,6 @@ func resultPosition(r uint64) int {
 }
 
 // IndexFoldModular performs case-insensitive substring search using staged kernels.
-// Uses fixed positions for normal needles, selectRarePairSample only for pathological cases.
-// Uses Raw variants that fold needle on-the-fly (no normalizeASCII overhead).
 func IndexFoldModular(haystack, needle string) int {
 	n := len(needle)
 	if n == 0 {
@@ -43,38 +41,41 @@ func IndexFoldModular(haystack, needle string) int {
 		return -1
 	}
 
-	// Use fixed positions: first byte and last byte (maximum spread)
-	// Fall back to middle byte if first==last (e.g., quoted strings like "num")
-	off1 := 0
+	// Use first + last byte (max spread), or first + middle if first==last
 	off2 := n - 1
 	if n > 2 && toLower(needle[0]) == toLower(needle[n-1]) {
 		off2 = n / 2
 	}
 
-	var result uint64
-	var resumePos int
-
-	// For short needles, skip 1-byte stage (overhead not worth it)
-	// For longer needles, 1-byte filter helps reduce false positives
+	// Short needles: skip 1-byte stage, go directly to 2-byte filter
 	if n <= 16 {
-		result = indexFold2ByteRaw(haystack, needle, off1, off2-off1)
-	} else {
-		// Stage 1: 1-byte filter
-		result = indexFold1ByteRaw(haystack, needle, off1)
-
+		result := indexFold2ByteRaw(haystack, needle, 0, off2)
 		if !resultExceeded(result) {
 			return resultPosition(result)
 		}
-
-		// Stage 2: 2-byte filter
-		resumePos = resultPosition(result)
+		resumePos := resultPosition(result)
 		if resumePos > 0 {
 			haystack = haystack[resumePos:]
 		}
-
-		result = indexFold2ByteRaw(haystack, needle, off1, off2-off1)
+		pos := indexFoldRabinKarp(haystack, needle)
+		if pos >= 0 {
+			return pos + resumePos
+		}
+		return -1
 	}
 
+	// Long needles: 1-byte -> 2-byte -> RK
+	result := indexFold1ByteRaw(haystack, needle, 0)
+	if !resultExceeded(result) {
+		return resultPosition(result)
+	}
+
+	resumePos := resultPosition(result)
+	if resumePos > 0 {
+		haystack = haystack[resumePos:]
+	}
+
+	result = indexFold2ByteRaw(haystack, needle, 0, off2)
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
 		if pos >= 0 {
@@ -83,7 +84,6 @@ func IndexFoldModular(haystack, needle string) int {
 		return -1
 	}
 
-	// Stage 3: Rabin-Karp fallback (folds both strings internally)
 	resumePos2 := resultPosition(result)
 	if resumePos2 > 0 {
 		haystack = haystack[resumePos2:]
@@ -107,38 +107,41 @@ func IndexExactModular(haystack, needle string) int {
 		return -1
 	}
 
-	// Use fixed positions: first byte and last byte (maximum spread)
-	// Fall back to middle byte if first==last (e.g., quoted strings like "num")
-	off1 := 0
+	// Use first + last byte (max spread), or first + middle if first==last
 	off2 := n - 1
 	if n > 2 && needle[0] == needle[n-1] {
 		off2 = n / 2
 	}
 
-	var result uint64
-	var resumePos int
-
-	// For short needles, skip 1-byte stage (overhead not worth it)
-	// For longer needles, 1-byte filter helps reduce false positives
+	// Short needles: skip 1-byte stage, go directly to 2-byte filter
 	if n <= 16 {
-		result = indexExact2Byte(haystack, needle, off1, off2-off1)
-	} else {
-		// Stage 1: 1-byte filter
-		result = indexExact1Byte(haystack, needle, off1)
-
+		result := indexExact2Byte(haystack, needle, 0, off2)
 		if !resultExceeded(result) {
 			return resultPosition(result)
 		}
-
-		// Stage 2: 2-byte filter
-		resumePos = resultPosition(result)
+		resumePos := resultPosition(result)
 		if resumePos > 0 {
 			haystack = haystack[resumePos:]
 		}
-
-		result = indexExact2Byte(haystack, needle, off1, off2-off1)
+		pos := strings.Index(haystack, needle)
+		if pos >= 0 {
+			return pos + resumePos
+		}
+		return -1
 	}
 
+	// Long needles: 1-byte -> 2-byte -> RK
+	result := indexExact1Byte(haystack, needle, 0)
+	if !resultExceeded(result) {
+		return resultPosition(result)
+	}
+
+	resumePos := resultPosition(result)
+	if resumePos > 0 {
+		haystack = haystack[resumePos:]
+	}
+
+	result = indexExact2Byte(haystack, needle, 0, off2)
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
 		if pos >= 0 {
@@ -147,21 +150,13 @@ func IndexExactModular(haystack, needle string) int {
 		return -1
 	}
 
-	// Stage 3: Fallback
 	resumePos2 := resultPosition(result)
 	if resumePos2 > 0 {
 		haystack = haystack[resumePos2:]
 		resumePos += resumePos2
 	}
 
-	// For short needles, use stdlib's brute-force (faster than RK)
-	// For long needles, use SIMD Rabin-Karp
-	var pos int
-	if n <= 8 {
-		pos = strings.Index(haystack, needle)
-	} else {
-		pos = indexExactRabinKarp(haystack, needle)
-	}
+	pos := indexExactRabinKarp(haystack, needle)
 	if pos >= 0 {
 		return pos + resumePos
 	}
