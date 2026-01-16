@@ -188,140 +188,11 @@ func getRankTable(ranks []byte, caseSensitive bool) *[256]uint16 {
 	return &customFolded
 }
 
-// selectRarePairFast finds two rare bytes by checking only first, middle, last positions.
-// Ultra-low overhead O(1) - just 3 rank lookups. Returns off1, off2 with off1 < off2.
-func selectRarePairFast(pattern string, caseSensitive bool) (off1, off2 int) {
-	n := len(pattern)
-	if n <= 1 {
-		return 0, 0
-	}
 
-	// Check 3 positions: first, middle, last
-	first, mid, last := 0, n/2, n-1
-	if mid == first {
-		mid = last // For len=2, mid==first, use last instead
-	}
-
-	var b0, b1, b2 byte
-	if caseSensitive {
-		b0, b1, b2 = pattern[first], pattern[mid], pattern[last]
-	} else {
-		b0, b1, b2 = toLower(pattern[first]), toLower(pattern[mid]), toLower(pattern[last])
-	}
-
-	r0, r1, r2 := byteRank[b0], byteRank[b1], byteRank[b2]
-
-	// Find the rarest byte position
-	bestOff := first
-	bestRank := r0
-	if r2 < bestRank {
-		bestOff = last
-		bestRank = r2
-	}
-	if r1 < bestRank {
-		bestOff = mid
-	}
-
-	// Second byte: pick one that's different from the best, preferring the one farther away
-	off1 = bestOff
-	if bestOff == first {
-		// Best is first, pick last if different, else mid
-		if b2 != b0 {
-			off2 = last
-		} else if b1 != b0 {
-			off2 = mid
-		} else {
-			off2 = last // All same, use last for max spread
-		}
-	} else if bestOff == last {
-		// Best is last, pick first if different, else mid
-		if b0 != b2 {
-			off2 = first
-		} else if b1 != b2 {
-			off2 = mid
-		} else {
-			off2 = first // All same, use first for max spread
-		}
-	} else {
-		// Best is mid, pick last if different (more spread), else first
-		if b2 != b1 {
-			off2 = last
-		} else if b0 != b1 {
-			off2 = first
-		} else {
-			off2 = last // All same
-		}
-	}
-
-	// Ensure off1 < off2
-	if off1 > off2 {
-		off1, off2 = off2, off1
-	}
-	return off1, off2
-}
-
-// selectRarePairSample finds two rare bytes by sampling 8 positions across the pattern.
-// O(1) complexity - used by IndexFold for one-shot searches.
-// Returns the two rarest bytes and their offsets, with off1 < off2.
-func selectRarePairSample(pattern string, ranks []byte, caseSensitive bool) (rare1 byte, off1 int, rare2 byte, off2 int) {
-	n := len(pattern)
-	if n == 0 {
-		return 0, 0, 0, 0
-	}
-
-	normalize := toLower
-	if caseSensitive {
-		normalize = func(b byte) byte { return b }
-	}
-
-	if n == 1 {
-		b := normalize(pattern[0])
-		return b, 0, b, 0
-	}
-
-	rankTable := getRankTable(ranks, caseSensitive)
-
-	// Sample 8 positions spread across the pattern
-	pos := [8]int{0, n / 8, (2 * n) / 8, (3 * n) / 8, (4 * n) / 8, (5 * n) / 8, (6 * n) / 8, n - 1}
-
-	// Find rarest and second-rarest among samples
-	best1Idx, best2Idx := 0, -1
-	best1Rank := rankTable[normalize(pattern[pos[0]])]
-
-	for i := 1; i < 8; i++ {
-		c := normalize(pattern[pos[i]])
-		r := rankTable[c]
-		if r < best1Rank {
-			best2Idx = best1Idx
-			best1Idx = i
-			best1Rank = r
-		} else if best2Idx == -1 || (c != normalize(pattern[pos[best1Idx]]) && r < rankTable[normalize(pattern[pos[best2Idx]])]) {
-			if c != normalize(pattern[pos[best1Idx]]) {
-				best2Idx = i
-			}
-		}
-	}
-
-	// Fallback if no distinct second byte found
-	if best2Idx == -1 {
-		return normalize(pattern[0]), 0, normalize(pattern[n-1]), n - 1
-	}
-
-	off1, off2 = pos[best1Idx], pos[best2Idx]
-	rare1, rare2 = normalize(pattern[off1]), normalize(pattern[off2])
-
-	if off1 > off2 {
-		off1, off2 = off2, off1
-		rare1, rare2 = rare2, rare1
-	}
-
-	return rare1, off1, rare2, off2
-}
-
-// selectRarePairFull finds two rare bytes by scanning the entire pattern.
+// selectRarePair finds two rare bytes by scanning the entire pattern.
 // O(n) complexity - used by NewSearcher where cost is amortized over many searches.
 // Returns the two rarest bytes and their offsets, with off1 < off2.
-func selectRarePairFull(pattern string, ranks []byte, caseSensitive bool) (rare1 byte, off1 int, rare2 byte, off2 int) {
+func selectRarePair(pattern string, ranks []byte, caseSensitive bool) (rare1 byte, off1 int, rare2 byte, off2 int) {
 	n := len(pattern)
 	if n == 0 {
 		return 0, 0, 0, 0
@@ -419,7 +290,7 @@ func init() {
 // If caseSensitive is false, searches are case-insensitive (ASCII letters only).
 // Uses O(n) full scan for optimal rare byte selection (cost amortized over many searches).
 func NewSearcher(pattern string, caseSensitive bool) Searcher {
-	rare1, off1, rare2, off2 := selectRarePairFull(pattern, nil, caseSensitive)
+	rare1, off1, rare2, off2 := selectRarePair(pattern, nil, caseSensitive)
 	norm := ""
 	if !caseSensitive {
 		norm = normalizeASCII(pattern)
@@ -461,7 +332,7 @@ func NewSearcherWithRanks(pattern string, ranks []byte, caseSensitive bool) Sear
 	if len(ranks) != 256 {
 		panic("ranks must have exactly 256 entries")
 	}
-	rare1, off1, rare2, off2 := selectRarePairFull(pattern, ranks, caseSensitive)
+	rare1, off1, rare2, off2 := selectRarePair(pattern, ranks, caseSensitive)
 	norm := ""
 	if !caseSensitive {
 		norm = normalizeASCII(pattern)

@@ -1046,12 +1046,12 @@ func TestSelectRarePair(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		rare1, _, rare2, _ := selectRarePairSample(tt.needle, nil, false)
+		rare1, _, rare2, _ := selectRarePair(tt.needle, nil, false)
 		// Just verify we get rare bytes, exact selection depends on implementation
 		if rare1 == 0 && len(tt.needle) > 0 {
-			t.Errorf("selectRarePairSample(%q): rare1 is 0", tt.needle)
+			t.Errorf("selectRarePair(%q): rare1 is 0", tt.needle)
 		}
-		t.Logf("selectRarePairSample(%q) = (%c, %c)", tt.needle, rare1, rare2)
+		t.Logf("selectRarePair(%q) = (%c, %c)", tt.needle, rare1, rare2)
 	}
 }
 
@@ -1082,7 +1082,7 @@ func FuzzSelectRarePair(f *testing.F) {
 			return
 		}
 
-		rare1, off1, rare2, off2 := selectRarePairSample(needle, nil, false)
+		rare1, off1, rare2, off2 := selectRarePair(needle, nil, false)
 
 		// Invariant 1: offsets must be in bounds
 		if off1 < 0 || off1 >= len(needle) {

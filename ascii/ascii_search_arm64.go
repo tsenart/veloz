@@ -182,7 +182,7 @@ func (s Searcher) Index(haystack string) int {
 }
 
 func indexFoldWithOffsets(haystack, normNeedle string, off1, off2 int) int {
-	// Searcher already selected rare bytes via corpus analysis or selectRarePairFull.
+	// Searcher already selected rare bytes via corpus analysis or selectRarePair.
 	// Only skip 1-byte for the pathological case where both offsets are the same.
 	skip1Byte := off1 == off2
 
