@@ -209,7 +209,7 @@ verify128_exact1:
 	VLD1.P 16(R21), [V10.B16]
 	VLD1.P 16(R22), [V11.B16]
 	VEOR   V10.B16, V11.B16, V12.B16
-	WORD   $0x6e30a98c               // UMAXP V12.B16, V12.B16, V12.B16
+	WORD   $0x6e30a98c               // UMAXV B12, V12.B16
 	FMOVS  F12, R6
 	CBNZW  R6, fail128_exact1
 	SUBS   $16, R23, R23
@@ -634,7 +634,7 @@ scalar_verify_exact1:
 	VLD1.P 16(R19), [V10.B16]
 	VLD1.P 16(R20), [V11.B16]
 	VEOR  V10.B16, V11.B16, V12.B16
-	WORD  $0x6e30a98c              // UMAXP V12.B16, V12.B16, V12.B16
+	WORD  $0x6e30a98c              // UMAXV B12, V12.B16
 	FMOVS F12, R6
 	CBNZW R6, scalar_fail_exact1
 	SUBS  $16, R21, R21
@@ -901,7 +901,7 @@ verify128_exact2:
 	VLD1.P 16(R21), [V10.B16]
 	VLD1.P 16(R22), [V11.B16]
 	VEOR   V10.B16, V11.B16, V12.B16
-	WORD   $0x6e30a98c               // UMAXP V12.B16, V12.B16, V12.B16
+	WORD   $0x6e30a98c               // UMAXV B12, V12.B16
 	FMOVS  F12, R6
 	CBNZW  R6, fail128_exact2
 	SUBS   $16, R25, R25
@@ -1346,7 +1346,7 @@ scalar_verify_exact2:
 	VLD1.P 16(R20), [V10.B16]
 	VLD1.P 16(R21), [V11.B16]
 	VEOR  V10.B16, V11.B16, V12.B16
-	WORD  $0x6e30a98c              // UMAXP V12.B16, V12.B16, V12.B16
+	WORD  $0x6e30a98c              // UMAXV B12, V12.B16
 	FMOVS F12, R6
 	CBNZW R6, scalar_fail_exact2
 	SUBS  $16, R22, R22

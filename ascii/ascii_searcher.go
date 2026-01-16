@@ -299,28 +299,49 @@ func NewSearcher(pattern string, caseSensitive bool) Searcher {
 	}
 }
 
+// BuildRankTable builds a byte frequency table from a corpus sample.
+// Lower rank values indicate rarer bytes (better for filtering).
+// Pass the result to NewSearcherWithRanks for corpus-optimized searching.
+//
+// The function case-folds letters (a-z → A-Z) so the table works for both
+// case-sensitive and case-insensitive searches.
+func BuildRankTable(corpus string) [256]byte {
+	var counts [256]int
+	for i := 0; i < len(corpus); i++ {
+		c := corpus[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 0x20 // uppercase
+		}
+		counts[c]++
+	}
+
+	maxCount := 1
+	for _, c := range counts {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+
+	var ranks [256]byte
+	for i := range ranks {
+		ranks[i] = byte((counts[i] * 255) / maxCount)
+	}
+	return ranks
+}
+
 // NewSearcherWithRanks creates a Searcher using a custom byte frequency table.
 // The ranks slice must have 256 entries where lower values indicate rarer bytes.
 // If caseSensitive is false, searches are case-insensitive (ASCII letters only).
 //
 // Use this for specialized corpora where byte frequencies differ from English:
+//   - JSON logs (where ", :, { are common)
 //   - DNA sequences (A, C, G, T equally common)
 //   - Hex dumps (0-9, A-F equally common)
-//   - Domain-specific logs with unusual patterns
 //
-// To build a rank table from a corpus:
+// Build a rank table with BuildRankTable:
 //
-//	var counts [256]int
-//	for i := 0; i < len(corpus); i++ {
-//	    c := corpus[i]
-//	    if c >= 'a' && c <= 'z' { c -= 0x20 }  // uppercase
-//	    counts[c]++
-//	}
-//	maxCount := slices.Max(counts[:])
-//	ranks := make([]byte, 256)
-//	for i, c := range counts {
-//	    ranks[i] = byte(c * 255 / maxCount)
-//	}
+//	ranks := ascii.BuildRankTable(corpusSample)
+//	searcher := ascii.NewSearcherWithRanks(`"trace_id":`, ranks[:], true)
 func NewSearcherWithRanks(pattern string, ranks []byte, caseSensitive bool) Searcher {
 	if len(ranks) != 256 {
 		panic("ranks must have exactly 256 entries")

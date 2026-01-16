@@ -1304,7 +1304,7 @@ func buildUUIDHeavyCorpus() string {
 // - JSON punctuation makes up 28% of the corpus
 func BenchmarkRankTable(b *testing.B) {
 	corpus := buildJSONLogCorpus()
-	ranks := buildRankTable(corpus)
+	ranks := BuildRankTable(corpus)
 
 	needles := []struct {
 		name   string
@@ -1349,7 +1349,7 @@ func BenchmarkRankTable(b *testing.B) {
 // BenchmarkRankTableUUID tests UUID search in a UUID-heavy corpus (distributed tracing).
 func BenchmarkRankTableUUID(b *testing.B) {
 	corpus := buildUUIDHeavyCorpus()
-	ranks := buildRankTable(corpus)
+	ranks := BuildRankTable(corpus)
 
 	// Corpus breakdown: '0'=22%, '"'=9.5%, '-'=7%, '4'=4%, '8'=3.8%, etc.
 	// Key insight: Static table has '"' at rank 60 (rare!), but it's 9.5% of corpus
@@ -1388,31 +1388,6 @@ func BenchmarkRankTableUUID(b *testing.B) {
 			static.rare1, static.off1, static.rare2, static.off2,
 			computed.rare1, computed.off1, computed.rare2, computed.off2)
 	}
-}
-
-// buildRankTable computes a byte frequency rank table from a corpus.
-func buildRankTable(corpus string) [256]byte {
-	var counts [256]int
-	for i := 0; i < len(corpus); i++ {
-		c := corpus[i]
-		if c >= 'a' && c <= 'z' {
-			c -= 0x20 // uppercase
-		}
-		counts[c]++
-	}
-
-	maxCount := 1
-	for _, c := range counts {
-		if c > maxCount {
-			maxCount = c
-		}
-	}
-
-	var ranks [256]byte
-	for i := range ranks {
-		ranks[i] = byte((counts[i] * 255) / maxCount)
-	}
-	return ranks
 }
 
 // FuzzIndex tests case-sensitive Index and Searcher against strings.Index
@@ -1466,5 +1441,39 @@ func TestScalarPathVerifyFail(t *testing.T) {
 	if got != want {
 		t.Fatalf("IndexFold() = %d, want %d\nhaystack: %q\nneedle: %q",
 			got, want, haystack, needle)
+	}
+}
+
+// TestRawBitClearNoInfiniteLoop verifies that the Raw functions' bit-clearing
+// logic correctly clears the current match bit after verification failure.
+//
+// There was a concern that the bit-clearing in raw1_clear16_from_verify might
+// leave the current bit SET, causing an infinite loop. Analysis shows this is
+// NOT the case:
+//
+//	ADD   $1, R15, R17      // R17 = bitIndex + 1
+//	LSL   $1, R17, R17      // R17 = (bitIndex + 1) * 2
+//	MOVD  $1, R19
+//	LSL   R17, R19, R17     // R17 = 1 << ((bitIndex + 1) * 2)
+//	SUB   $1, R17, R17      // R17 = mask of bits 0 through ((bitIndex+1)*2 - 1)
+//	BIC   R17, R13, R13     // Clears current bit AND all bits below
+//
+// For byte index 5: mask = (1 << 12) - 1 = 0xFFF, which clears bits 0-11,
+// including byte 5's 2-bit field at bits 10-11. This is correct (if aggressive).
+//
+// Additionally, there's a failure counter (R25) with threshold that would
+// bail out to "exceeded" even if there were a bug.
+func TestRawBitClearNoInfiniteLoop(t *testing.T) {
+	// Construct a case where:
+	// - first byte 'q' matches at multiple positions in haystack
+	// - but the full needle doesn't match at any of those positions
+	// - this exercises the bit-clear path repeatedly
+	haystack := "qaaaaqaaaaqaaaa"
+	needle := "qzzz"
+
+	// Should return -1 (not found) without hanging
+	result := indexFold1ByteRaw(haystack, needle, 0)
+	if result != ^uint64(0) {
+		t.Errorf("expected not found (0x%x), got 0x%x", ^uint64(0), result)
 	}
 }

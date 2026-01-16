@@ -1,26 +1,23 @@
 # veloz
 
-Veloz is a high-performance SIMD-accelerated library for ASCII and UTF-8 string operations in Go. It provides fast validation and case-insensitive string matching, leveraging SIMD instructions on supported architectures for significant performance improvements over standard library implementations.
+Veloz is a high-performance SIMD-accelerated library for ASCII and UTF-8 string operations in Go. It provides fast validation, case-insensitive string matching, and substring search, leveraging SIMD instructions on supported architectures.
 
-While amd64 SIMD optimizations are becoming common in the Go ecosystem, arm64 (NEON) support is often overlooked. Veloz focuses on providing first-class SIMD acceleration for arm64, making it ideal for deployment on ARM-based servers like AWS Graviton, Apple Silicon, and other ARM platforms.
-
-Another motivation for veloz is maintainability. Many Go packages rely on hand-rolled assembly for performance-critical code, which is notoriously difficult to maintain, debug, and extend. By writing SIMD implementations in C and transpiling them to Go assembly using [gocc](https://github.com/mhr3/gocc), veloz keeps the source code readable and maintainable while still delivering native performance.
+While amd64 SIMD optimizations are common in the Go ecosystem, arm64 (NEON) support is often overlooked. Veloz provides first-class SIMD acceleration for arm64, ideal for AWS Graviton, Apple Silicon, and other ARM platforms.
 
 ## Features
 
-- High-speed ASCII string validation
-- Case-insensitive ASCII string comparison (`EqualFold`)
-- Case-insensitive ASCII substring search (`IndexFold`, `SearchNeedle`)
-- Precomputed needle search for repeated lookups (`MakeNeedle`, `SearchNeedle`)
-- Multi-character search (`IndexAny`, `ContainsAny`) - find any byte from a set
-- Fast UTF-8 validation
+- **Validation**: `ValidString` - high-speed ASCII string validation
+- **Comparison**: `EqualFold` - case-insensitive ASCII string comparison
+- **Substring search**: 
+  - `Index` - case-sensitive search
+  - `IndexFold` - case-insensitive search  
+  - `Searcher` - precomputed pattern for repeated searches
+- **Character set search**: `IndexAny`, `ContainsAny` - find any byte from a set
+- **UTF-8**: `utf8.ValidString` - fast UTF-8 validation
 - SIMD support for amd64 (AVX2, SSE4.1) and arm64 (NEON)
-- NEON bitset (TBL2) acceleration for `IndexAny` with unlimited character sets
 - Pure Go fallback for other architectures
 
 ## Installation
-
-To install the library, use `go get`:
 
 ```sh
 go get github.com/mhr3/veloz
@@ -28,195 +25,216 @@ go get github.com/mhr3/veloz
 
 ## Usage
 
-### ASCII Operations
-
-The `ascii` package provides functions for validating and searching ASCII strings:
+### Basic Substring Search
 
 ```go
-package main
+import "github.com/mhr3/veloz/ascii"
 
-import (
-    "fmt"
+// Case-sensitive search
+idx := ascii.Index("Hello, World!", "World")  // 7
 
-    "github.com/mhr3/veloz/ascii"
-)
+// Case-insensitive search  
+idx := ascii.IndexFold("Hello, World!", "WORLD")  // 7
+```
 
-func main() {
-    // Check if a string contains only ASCII characters
-    fmt.Println(ascii.ValidString("Hello, World!"))  // true
-    fmt.Println(ascii.ValidString("Hello, 世界!"))   // false
+### Searcher for Repeated Searches
 
-    // Case-insensitive string comparison
-    fmt.Println(ascii.EqualFold("Hello", "HELLO"))   // true
-    fmt.Println(ascii.EqualFold("Hello", "World"))   // false
+`Searcher` precomputes rare-byte offsets from the pattern, amortizing the analysis cost across many searches. Use it when searching for the same needle in multiple haystacks.
 
-    // Case-insensitive substring search
-    fmt.Println(ascii.IndexFold("Hello, World!", "WORLD"))  // 7
-    fmt.Println(ascii.IndexFold("Hello, World!", "foo"))    // -1
+```go
+// Create a case-insensitive searcher (false = case-insensitive)
+searcher := ascii.NewSearcher("error", false)
 
-    // Precomputed needle for repeated searches (1.7x faster for rare-byte needles)
-    needle := ascii.MakeNeedle("lazy")
-    fmt.Println(ascii.SearchNeedle("the quick brown fox jumps over the lazy dog", needle))  // 35
-
-    // Custom rank table for specialized corpora (DNA, hex dumps, etc.)
-    dnaRanks := make([]byte, 256)
-    for i := range dnaRanks { dnaRanks[i] = 255 }  // all rare by default
-    for _, c := range "ACGT" { dnaRanks[c] = 128 } // A,C,G,T equally common
-    dnaRanks['N'] = 64  // N is rarer
-    dnaRanks['X'] = 32  // X is very rare
-    dnaPattern := ascii.MakeNeedleWithRanks("GATTACA", dnaRanks)
-    _ = dnaPattern
-
-    // Find first occurrence of any character from a set
-    fmt.Println(ascii.IndexAny("hello world", " \t\n"))     // 5 (space)
-    fmt.Println(ascii.ContainsAny("hello", "aeiou"))        // true
+// Reuse for many searches - no per-call pattern analysis
+for _, line := range logLines {
+    if idx := searcher.Index(line); idx >= 0 {
+        // found
+    }
 }
+
+// Case-sensitive searcher (true = case-sensitive)
+exact := ascii.NewSearcher(`"trace_id":`, true)
+```
+
+The `caseSensitive` boolean parameter controls matching behavior:
+- `true` - exact byte matching (like `strings.Index`)
+- `false` - ASCII case-insensitive matching (like `strings.EqualFold`)
+
+### Corpus-Specific Optimization
+
+For specialized data where byte frequencies differ from typical English text (JSON logs, hex dumps, DNA sequences), use `BuildRankTable` and `NewSearcherWithRanks`:
+
+```go
+// Build rank table from a corpus sample (do once at init)
+ranks := ascii.BuildRankTable(corpusSample)
+
+// Create optimized searcher
+searcher := ascii.NewSearcherWithRanks(`"trace_id":`, ranks[:], true)
+```
+
+This is particularly effective for JSON data where characters like `"`, `:`, and `{` are common - the default English-derived frequency table treats these as rare, causing false positives.
+
+### Character Set Search
+
+```go
+// Find first occurrence of any character from set
+idx := ascii.IndexAny("hello world", " \t\n")  // 5 (space)
+
+// Check if any character exists
+found := ascii.ContainsAny("hello", "aeiou")  // true
+
+// Precompute charset for repeated searches
+cs := ascii.MakeCharSet(" \t\n\r")
+for _, line := range lines {
+    if idx := ascii.IndexAnyCharSet(line, cs); idx >= 0 {
+        // found whitespace
+    }
+}
+```
+
+### Validation and Comparison
+
+```go
+ascii.ValidString("Hello, World!")   // true
+ascii.ValidString("Hello, 世界!")    // false (contains non-ASCII)
+
+ascii.EqualFold("Hello", "HELLO")    // true
+ascii.HasPrefixFold("Hello", "HE")   // true
+ascii.HasSuffixFold("Hello", "LO")   // true
 ```
 
 ### UTF-8 Validation
 
-The `utf8` package provides fast UTF-8 string validation:
-
 ```go
-package main
+import "github.com/mhr3/veloz/utf8"
 
-import (
-    "fmt"
-
-    "github.com/mhr3/veloz/utf8"
-)
-
-func main() {
-    // Validate UTF-8 strings
-    fmt.Println(utf8.ValidString("Hello, 世界!"))           // true
-    fmt.Println(utf8.ValidString("Valid UTF-8 string"))    // true
-    fmt.Println(utf8.ValidString(string([]byte{0xff})))    // false (invalid UTF-8)
-}
+utf8.ValidString("Hello, 世界!")         // true
+utf8.ValidString(string([]byte{0xff}))  // false
 ```
+
+## API Reference
+
+### Substring Search
+
+| Function | Description |
+|----------|-------------|
+| `Index(haystack, needle)` | Case-sensitive substring search |
+| `IndexFold(haystack, needle)` | Case-insensitive substring search |
+| `NewSearcher(pattern, caseSensitive)` | Create precomputed Searcher |
+| `BuildRankTable(corpus)` | Build byte frequency table from corpus |
+| `NewSearcherWithRanks(pattern, ranks, caseSensitive)` | Searcher with custom byte frequency table |
+| `Searcher.Index(haystack)` | Search using precomputed pattern |
+
+### Character Set Search
+
+| Function | Description |
+|----------|-------------|
+| `IndexAny(s, chars)` | Find first byte from chars |
+| `ContainsAny(s, chars)` | Check if any byte from chars exists |
+| `MakeCharSet(chars)` | Precompute character set |
+| `IndexAnyCharSet(s, cs)` | Search with precomputed CharSet |
+| `ContainsAnyCharSet(s, cs)` | Check with precomputed CharSet |
+
+### Validation and Comparison
+
+| Function | Description |
+|----------|-------------|
+| `ValidString(s)` | Check if string is valid ASCII |
+| `EqualFold(a, b)` | Case-insensitive equality |
+| `HasPrefixFold(s, prefix)` | Case-insensitive prefix check |
+| `HasSuffixFold(s, suffix)` | Case-insensitive suffix check |
+| `IndexNonASCII(s)` | Find first non-ASCII byte |
 
 ## Benchmarks
 
-| Function           | CPU        | naive (MB/s) | veloz (MB/s) | Speedup |
-|--------------------|------------|--------------|--------------|---------|
-| ascii.ValidString  | Graviton 2 | 4,903        | 33,684       | 6.9x    |
-| ascii.EqualFold    | Graviton 2 |   879        | 7,566        | 8.6x    |
-| ascii.IndexFold    | Graviton 2 | 2,652        | 7,947        | 3.0x    |
-| utf8.ValidString   | Graviton 2 |   618        | 3,090        | 5.0x    |
-| ascii.ValidString  | Apple M2   | 12,256       | 89,227       | 7.3x    |
-| ascii.EqualFold    | Apple M2   | 2,336        | 21,254       | 9.1x    |
-| ascii.IndexFold    | Apple M2   | 7,117        | 29,046       | 4.1x    |
-| utf8.ValidString   | Apple M2   | 1,673        | 10,014       | 6.0x    |
+All substring search benchmarks use the "json" scenario (searching for `"name":` in JSON-like data with high false-positive rates). This represents real-world workloads where stdlib performance degrades.
 
-### IndexAny Performance
+Raw benchmark data: [ascii/bench/](ascii/bench/)
+- [m3_max.txt](ascii/bench/m3_max.txt), [m3_max_indexany.txt](ascii/bench/m3_max_indexany.txt) — Apple M3 Max
+- [graviton4.txt](ascii/bench/graviton4.txt), [graviton4_indexany.txt](ascii/bench/graviton4_indexany.txt) — AWS Graviton 4
+- [graviton3.txt](ascii/bench/graviton3.txt), [graviton3_indexany.txt](ascii/bench/graviton3_indexany.txt) — AWS Graviton 3
 
-The `IndexAny` and `ContainsAny` functions use a NEON bitset approach (TBL2+TBL1 table lookups) that supports **unlimited character sets** with consistent performance.
+### Substring Search: Index vs stdlib (1KB, case-sensitive)
 
-**Throughput on Apple M3 Max:**
+| Scenario | strings.Index | ascii.Index | Speedup |
+|----------|-------------:|------------:|--------:|
+| json | 308 ns | 24 ns | **12.6x** |
+| samechar | 408 ns | 26 ns | **15.7x** |
+| periodic | 313 ns | 25 ns | **12.3x** |
+| logdate | 556 ns | 186 ns | **3.0x** |
+| codebraces | 541 ns | 151 ns | **3.6x** |
+| hexdata | 301 ns | 200 ns | **1.5x** |
+| digits | 344 ns | 204 ns | **1.7x** |
+| match_end | 15 ns | 16 ns | 0.9x |
+| match_mid | 10 ns | 16 ns | 0.7x |
+| rarebyte | 16 ns | 17 ns | 0.9x |
+| needle3 | 16 ns | 24 ns | 0.7x |
+| dna | 16 ns | 16 ns | 1.0x |
+| notfound | 14 ns | 14 ns | 1.0x |
 
-| Chars | Go (GB/s) | NEON bitset (GB/s) | Speedup |
-|------:|----------:|-------------------:|--------:|
-|     1 |       2.4 |               25.5 |   10.8x |
-|    16 |       2.2 |               25.9 |   11.6x |
-|    64 |       1.9 |               25.8 |   13.8x |
+*Apple M3 Max. Scenarios where stdlib is faster have speedup < 1.0x.*
 
-*The NEON bitset uses ARM's TBL2 instruction for 32-byte table lookups, which is heavily optimized for cryptographic operations.*
+**When veloz wins**: High false-positive patterns (json, samechar, periodic) where the first byte of the needle appears frequently in the haystack. The staged rare-byte filtering avoids verifying every candidate.
 
-### SearchNeedle Performance
+**When stdlib wins**: Short haystacks with early matches (match_mid, needle3) where SIMD setup overhead exceeds the scan time. For these cases, stdlib's simple loop is faster.
 
-`IndexFold` and `SearchNeedle` use an adaptive NEON implementation combining techniques from [memchr](https://github.com/BurntSushi/memchr) (rare-byte selection) and [Sneller](https://github.com/SnellerInc/sneller) (compare+XOR normalization, tail masking):
+### Case-Insensitive Search: IndexFold
 
-- **Rare-byte selection**: Picks the two rarest bytes in the needle (using English frequency table) to minimize false positives
-- **Adaptive filtering**: Starts with 1-byte fast path, switches to 2-byte filtering when false positives exceed threshold
-- **Compare+XOR normalization**: ~4 NEON instructions instead of table lookups for case folding
-- **Tail masking**: No scalar remainder loop - handles tail with SIMD masks
+| Platform | 1KB | 64KB |
+|----------|----:|-----:|
+| Apple M3 Max | 38 ns | 1.8 µs |
+| AWS Graviton 4 | 67 ns | 3.4 µs |
+| AWS Graviton 3 | 71 ns | 3.8 µs |
 
-For repeated searches with the same needle, `SearchNeedle` with a precomputed `Needle` avoids the overhead of computing rare bytes and normalizing the needle on each call.
+*"json" scenario*
 
-**Full Comparison (Apple M3 Max):**
+### Searcher with Corpus-Tuned Ranks
 
-| Size | strings.Index | IndexFold | SearchNeedle | IndexFold vs Go |
-|------|-------------:|----------:|-------------:|----------------:|
-| 1KB | 58.8 GB/s | 25.7 GB/s | 43.4 GB/s | 44% |
-| 64KB | 81.9 GB/s | 66.2 GB/s | 67.3 GB/s | 81% |
-| 1MB | 82.3 GB/s | 68.0 GB/s | 68.1 GB/s | 83% |
-| JSON 1KB | 2.7 GB/s | 15.3 GB/s | 19.7 GB/s | **5.7x** |
-| JSON 64KB | 3.3 GB/s | 33.2 GB/s | 33.5 GB/s | **10.0x** |
-| JSON 1MB | 3.4 GB/s | 33.7 GB/s | 33.8 GB/s | **10.1x** |
+For JSON data, `Searcher_corpus` (using corpus-derived byte ranks) significantly outperforms default rare-byte selection:
 
-**Full Comparison (Graviton 4):**
+| Platform | Index | Searcher | Searcher_corpus |
+|----------|------:|---------:|----------------:|
+| Apple M3 Max | 1.35 µs | 1.45 µs | **0.61 µs** |
+| AWS Graviton 4 | 2.69 µs | 2.94 µs | **1.60 µs** |
+| AWS Graviton 3 | 2.72 µs | 3.00 µs | **1.50 µs** |
 
-| Size | strings.Index | IndexFold | SearchNeedle | IndexFold vs Go |
-|------|-------------:|----------:|-------------:|----------------:|
-| 1KB | 32.0 GB/s | 18.5 GB/s | 25.5 GB/s | 58% |
-| 64KB | 42.5 GB/s | 40.1 GB/s | 40.4 GB/s | 94% |
-| 1MB | 38.4 GB/s | 36.2 GB/s | 36.2 GB/s | 94% |
-| JSON 1KB | 2.3 GB/s | 9.8 GB/s | 11.3 GB/s | **4.2x** |
-| JSON 64KB | 2.8 GB/s | 17.8 GB/s | 17.9 GB/s | **6.4x** |
-| JSON 1MB | 2.8 GB/s | 17.5 GB/s | 17.5 GB/s | **6.3x** |
+*64KB JSON input, case-sensitive search*
 
-**Full Comparison (Graviton 3):**
+### IndexAny: SIMD vs Pure Go
 
-| Size | strings.Index | IndexFold | SearchNeedle | IndexFold vs Go |
-|------|-------------:|----------:|-------------:|----------------:|
-| 1KB | 31.4 GB/s | 16.5 GB/s | 24.5 GB/s | 53% |
-| 64KB | 37.6 GB/s | 32.7 GB/s | 33.0 GB/s | 87% |
-| 1MB | 32.8 GB/s | 29.3 GB/s | 29.2 GB/s | 89% |
-| JSON 1KB | 2.2 GB/s | 8.3 GB/s | 9.6 GB/s | **3.8x** |
-| JSON 64KB | 2.6 GB/s | 16.7 GB/s | 16.8 GB/s | **6.5x** |
-| JSON 1MB | 2.6 GB/s | 15.2 GB/s | 15.0 GB/s | **5.9x** |
+| Chars in set | Pure Go | ascii.IndexAny | Speedup |
+|-------------:|--------:|---------------:|--------:|
+| 1 | 381 ns | 32 ns | **12x** |
+| 16 | 404 ns | 45 ns | **9x** |
+| 64 | 490 ns | 143 ns | **3.4x** |
 
-Key findings:
-- **High false-positive scenarios (JSON)**: IndexFold is **4-10x faster** than Go's case-sensitive strings.Index
-- **Large inputs (64KB+)**: IndexFold achieves 81-94% of Go's case-sensitive speed
-- **Small inputs (1KB)**: SearchNeedle is ~1.5-1.7x faster than IndexFold due to precomputation overhead
-- For large inputs, IndexFold and SearchNeedle have nearly identical performance
+*Apple M3 Max, 1KB input, match not found*
 
-The 768B threshold between 32-byte and 128-byte loops was empirically tuned by sweeping thresholds from 512B to 2KB on Graviton 3/4. See [docs/NEON_ADAPTIVE_TECHNIQUES.md](docs/NEON_ADAPTIVE_TECHNIQUES.md#loop-threshold-tuning) for details.
+### Core Functions (1KB input)
 
-#### When Do Custom Rank Tables Help?
+| Function | M3 Max | Graviton 4 | Graviton 3 |
+|----------|-------:|-----------:|-----------:|
+| `ValidString` | 107 GB/s | 61 GB/s | 54 GB/s |
+| `EqualFold` | 26 GB/s | 14 GB/s | 11 GB/s |
 
-The default `byteRank` table uses English letter frequency. For **JSON logs and traces**, this can be suboptimal:
+## Implementation
 
-| Byte | Static Rank | JSON Logs | UUID-Heavy Traces |
-|------|-------------|-----------|-------------------|
-| `"` (double-quote) | 60 (rare) | **#1** (15%) | **#2** (9.5%) |
-| `:` (colon) | 70 (rare) | **#2** (5%) | #13 (2.4%) |
-| `0` (zero) | 130 (common) | #4 (4.6%) | **#1** (22%) |
-| `{` `}` | 20 (very rare) | #17-18 | #21+ |
+The substring search uses an adaptive three-stage approach combining techniques from [memchr](https://github.com/BurntSushi/memchr) (rare-byte selection) and [Sneller](https://github.com/SnellerInc/sneller) (SIMD string matching):
 
-**Benchmark: UUID-heavy traces** (168KB corpus, Apple M3 Max):
+1. **Stage 1: Single rare-byte filter** - Fast SIMD scan for one rare byte from the pattern. Exits early if match density is low.
 
-| Needle | Static | Computed | Speedup |
-|--------|-------:|---------:|--------:|
-| `"span_id":"0002da12` | 22.1 GB/s | 30.3 GB/s | **1.37x** |
-| `"parent_id":"0003c` | 21.2 GB/s | 41.2 GB/s | **1.95x** |
+2. **Stage 2: Two-byte filter** - SIMD scan for two rare bytes simultaneously. More selective when Stage 1 hits too many false positives.
 
-**Algorithm**: `MakeNeedleWithRanks` uses an optimized rare-byte pair selection that balances byte rarity with distance separation. When you provide corpus-computed ranks, the algorithm trusts this frequency data and uses full `rarity × distance` scoring to find optimal filter bytes. This is particularly effective for UUID/trace ID searches where the default English-based table would pick common bytes like `"` as "rare".
+3. **Stage 3: Rabin-Karp fallback** - Rolling hash with SIMD verification. Guaranteed linear time for pathological patterns (e.g., `"aaa"` in `"aaaa...a"`).
 
-**When to use custom rank tables**:
-- **Best for**: UUID-heavy trace data, hex dumps, structured logs with predictable patterns
-- **Biggest wins**: Long needles with distinctive bytes spread across the pattern
-- **Setup cost**: One-time computation of 256-byte frequency table per corpus
+The staged approach adapts to data characteristics at runtime, avoiding worst-case behavior that affects simpler algorithms.
 
-**Recommendation for logs/traces databases**:
-- Compute byte frequencies once per table/partition (256 bytes of metadata)
-- Use `MakeNeedleWithRanks` for 30-95% speedup on UUID/trace ID searches
-- The algorithm automatically optimizes for both rarity and byte separation
+### Rare-Byte Selection
 
-```go
-// Build rank table from corpus (do once, store with data)
-var counts [256]int
-for i := 0; i < len(corpus); i++ {
-    c := corpus[i]
-    if c >= 'a' && c <= 'z' { c -= 0x20 }  // case-fold
-    counts[c]++
-}
-maxCount := slices.Max(counts[:])
-ranks := make([]byte, 256)
-for i, c := range counts {
-    ranks[i] = byte(c * 255 / maxCount)
-}
+The search algorithm's performance depends on finding rare bytes in the pattern to minimize false positives. The default frequency table is derived from the CIA World Factbook, rustc source, and Septuaginta—representative of English text.
 
-// Use for searches
-needle := ascii.MakeNeedleWithRanks(`"trace_id":"abc123`, ranks)
-```
+For domain-specific data, `NewSearcherWithRanks` allows custom frequency tables. This is critical for JSON where `"`, `:`, and `{` appear frequently but are treated as rare by English-derived tables.
+
+## License
+
+MIT

@@ -128,7 +128,7 @@ func BenchmarkSearch(b *testing.B) {
 			})
 
 			// Searcher with corpus-computed ranks (optimal rare byte selection)
-			ranks := buildRankTable(tc.haystack)
+			ranks := BuildRankTable(tc.haystack)
 			corpusSearcher := NewSearcherWithRanks(tc.needle, ranks[:], true)
 			b.Run(name(tc.scenario, tc.size, "Searcher_corpus"), func(b *testing.B) {
 				b.SetBytes(int64(len(tc.haystack)))
@@ -160,7 +160,7 @@ func BenchmarkSearch(b *testing.B) {
 			})
 
 			// Searcher with corpus-computed ranks (optimal rare byte selection)
-			ranks := buildRankTable(tc.haystack)
+			ranks := BuildRankTable(tc.haystack)
 			corpusSearcher := NewSearcherWithRanks(tc.needle, ranks[:], false)
 			b.Run(name(tc.scenario, tc.size, "Searcher_corpus"), func(b *testing.B) {
 				b.SetBytes(int64(len(tc.haystack)))
