@@ -2217,13 +2217,12 @@ fold1_scalar_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	// Normalize haystack then compare with pre-normalized needle
-	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
-	VADD  V4.B16, V13.B16, V14.B16  // V14 = (h|0x20) + 159
-	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (is_letter mask)
-	VAND  V8.B16, V14.B16, V14.B16  // V14 = is_letter ? 0x20 : 0
-	VORR  V14.B16, V10.B16, V10.B16 // V10 = h_norm
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	// Derive fold mask from needle (not haystack) - needle is pre-normalized
+	VADD  V4.B16, V11.B16, V14.B16  // V14 = needle + 159
+	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (needle_is_letter mask)
+	VAND  V8.B16, V14.B16, V14.B16  // V14 = needle_is_letter ? 0x20 : 0
+	VORR  V14.B16, V10.B16, V10.B16 // V10 = h | mask (fold only where needle is letter)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_folded XOR needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, fold1_scalar_vloop
@@ -2237,13 +2236,12 @@ fold1_scalar_vtail:
 	VLD1  (R22), [V11.B16]
 	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4] - tail mask
 
-	// Normalize haystack then compare with pre-normalized needle
-	VORR  V8.B16, V10.B16, V14.B16  // V14 = h | 0x20
-	VADD  V4.B16, V14.B16, V15.B16  // V15 = (h|0x20) + 159
-	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is_letter mask)
-	VAND  V8.B16, V15.B16, V15.B16  // V15 = is_letter ? 0x20 : 0
-	VORR  V15.B16, V10.B16, V10.B16 // V10 = h_norm
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	// Derive fold mask from needle (not haystack) - needle is pre-normalized
+	VADD  V4.B16, V11.B16, V15.B16  // V15 = needle + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (needle_is_letter mask)
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = needle_is_letter ? 0x20 : 0
+	VORR  V15.B16, V10.B16, V10.B16 // V10 = h | mask (fold only where needle is letter)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_folded XOR needle
 	VAND  V13.B16, V10.B16, V10.B16 // Mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
@@ -2272,13 +2270,12 @@ fold1_scalar_nl_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	// Normalize haystack then compare with pre-normalized needle
-	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
-	VADD  V4.B16, V13.B16, V14.B16  // V14 = (h|0x20) + 159
-	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (is_letter mask)
-	VAND  V8.B16, V14.B16, V14.B16  // V14 = is_letter ? 0x20 : 0
-	VORR  V14.B16, V10.B16, V10.B16 // V10 = h_norm
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	// Derive fold mask from needle (not haystack) - needle is pre-normalized
+	VADD  V4.B16, V11.B16, V14.B16  // V14 = needle + 159
+	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (needle_is_letter mask)
+	VAND  V8.B16, V14.B16, V14.B16  // V14 = needle_is_letter ? 0x20 : 0
+	VORR  V14.B16, V10.B16, V10.B16 // V10 = h | mask (fold only where needle is letter)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_folded XOR needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, fold1_scalar_nl_vloop
@@ -2292,13 +2289,12 @@ fold1_scalar_nl_vtail:
 	VLD1  (R22), [V11.B16]
 	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4] - tail mask
 
-	// Normalize haystack then compare with pre-normalized needle
-	VORR  V8.B16, V10.B16, V14.B16  // V14 = h | 0x20
-	VADD  V4.B16, V14.B16, V15.B16  // V15 = (h|0x20) + 159
-	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is_letter mask)
-	VAND  V8.B16, V15.B16, V15.B16  // V15 = is_letter ? 0x20 : 0
-	VORR  V15.B16, V10.B16, V10.B16 // V10 = h_norm
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	// Derive fold mask from needle (not haystack) - needle is pre-normalized
+	VADD  V4.B16, V11.B16, V15.B16  // V15 = needle + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (needle_is_letter mask)
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = needle_is_letter ? 0x20 : 0
+	VORR  V15.B16, V10.B16, V10.B16 // V10 = h | mask (fold only where needle is letter)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_folded XOR needle
 	VAND  V13.B16, V10.B16, V10.B16 // Mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
@@ -2330,13 +2326,12 @@ fold1_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	// Normalize haystack then compare with pre-normalized needle
-	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
-	VADD  V4.B16, V13.B16, V14.B16  // V14 = (h|0x20) + 159
-	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (is_letter mask)
-	VAND  V8.B16, V14.B16, V14.B16  // V14 = is_letter ? 0x20 : 0
-	VORR  V14.B16, V10.B16, V10.B16 // V10 = h_norm (lowercase letters)
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	// Derive fold mask from needle (not haystack) - needle is pre-normalized
+	VADD  V4.B16, V11.B16, V14.B16  // V14 = needle + 159
+	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (needle_is_letter mask)
+	VAND  V8.B16, V14.B16, V14.B16  // V14 = needle_is_letter ? 0x20 : 0
+	VORR  V14.B16, V10.B16, V10.B16 // V10 = h | mask (fold only where needle is letter)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_folded XOR needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10 (any non-zero?)
 	FMOVS F10, R23
 	CBZW  R23, fold1_vloop
@@ -2350,13 +2345,12 @@ fold1_vtail:
 	VLD1  (R22), [V11.B16]
 	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4] - tail mask
 
-	// Normalize haystack then compare with pre-normalized needle
-	VORR  V8.B16, V10.B16, V14.B16  // V14 = h | 0x20
-	VADD  V4.B16, V14.B16, V15.B16  // V15 = (h|0x20) + 159
-	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is_letter mask)
-	VAND  V8.B16, V15.B16, V15.B16  // V15 = is_letter ? 0x20 : 0
-	VORR  V15.B16, V10.B16, V10.B16 // V10 = h_norm
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	// Derive fold mask from needle (not haystack) - needle is pre-normalized
+	VADD  V4.B16, V11.B16, V15.B16  // V15 = needle + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (needle_is_letter mask)
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = needle_is_letter ? 0x20 : 0
+	VORR  V15.B16, V10.B16, V10.B16 // V10 = h | mask (fold only where needle is letter)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_folded XOR needle
 	VAND  V13.B16, V10.B16, V10.B16 // Mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
@@ -2906,13 +2900,12 @@ fold2_scalar_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	// Normalize haystack then compare with pre-normalized needle
-	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
-	VADD  V4.B16, V13.B16, V14.B16  // V14 = (h|0x20) + 159
-	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (is_letter mask)
-	VAND  V8.B16, V14.B16, V14.B16  // V14 = is_letter ? 0x20 : 0
-	VORR  V14.B16, V10.B16, V10.B16 // V10 = h_norm
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	// Derive fold mask from needle (not haystack) - needle is pre-normalized
+	VADD  V4.B16, V11.B16, V14.B16  // V14 = needle + 159
+	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (needle_is_letter mask)
+	VAND  V8.B16, V14.B16, V14.B16  // V14 = needle_is_letter ? 0x20 : 0
+	VORR  V14.B16, V10.B16, V10.B16 // V10 = h | mask (fold only where needle is letter)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_folded XOR needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, fold2_scalar_vloop
@@ -2926,13 +2919,12 @@ fold2_scalar_vtail:
 	VLD1  (R22), [V11.B16]
 	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4] - tail mask
 
-	// Normalize haystack then compare with pre-normalized needle
-	VORR  V8.B16, V10.B16, V14.B16  // V14 = h | 0x20
-	VADD  V4.B16, V14.B16, V15.B16  // V15 = (h|0x20) + 159
-	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is_letter mask)
-	VAND  V8.B16, V15.B16, V15.B16  // V15 = is_letter ? 0x20 : 0
-	VORR  V15.B16, V10.B16, V10.B16 // V10 = h_norm
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	// Derive fold mask from needle (not haystack) - needle is pre-normalized
+	VADD  V4.B16, V11.B16, V15.B16  // V15 = needle + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (needle_is_letter mask)
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = needle_is_letter ? 0x20 : 0
+	VORR  V15.B16, V10.B16, V10.B16 // V10 = h | mask (fold only where needle is letter)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_folded XOR needle
 	VAND  V13.B16, V10.B16, V10.B16 // Mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
@@ -2964,13 +2956,12 @@ fold2_vloop:
 	VLD1.P 16(R22), [V11.B16]
 	MOVD   R23, R19
 
-	// Normalize haystack then compare with pre-normalized needle
-	VORR  V8.B16, V10.B16, V13.B16  // V13 = h | 0x20
-	VADD  V4.B16, V13.B16, V14.B16  // V14 = (h|0x20) + 159
-	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (is_letter mask)
-	VAND  V8.B16, V14.B16, V14.B16  // V14 = is_letter ? 0x20 : 0
-	VORR  V14.B16, V10.B16, V10.B16 // V10 = h_norm
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	// Derive fold mask from needle (not haystack) - needle is pre-normalized
+	VADD  V4.B16, V11.B16, V14.B16  // V14 = needle + 159
+	WORD  $0x6e2e34ee               // VCMHI V14.B16, V7.B16, V14.B16 (needle_is_letter mask)
+	VAND  V8.B16, V14.B16, V14.B16  // V14 = needle_is_letter ? 0x20 : 0
+	VORR  V14.B16, V10.B16, V10.B16 // V10 = h | mask (fold only where needle is letter)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_folded XOR needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
 	CBZW  R23, fold2_vloop
@@ -2984,13 +2975,12 @@ fold2_vtail:
 	VLD1  (R22), [V11.B16]
 	WORD  $0x3cf37b0d               // LDR Q13, [R24, R19, LSL #4] - tail mask
 
-	// Normalize haystack then compare with pre-normalized needle
-	VORR  V8.B16, V10.B16, V14.B16  // V14 = h | 0x20
-	VADD  V4.B16, V14.B16, V15.B16  // V15 = (h|0x20) + 159
-	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (is_letter mask)
-	VAND  V8.B16, V15.B16, V15.B16  // V15 = is_letter ? 0x20 : 0
-	VORR  V15.B16, V10.B16, V10.B16 // V10 = h_norm
-	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_norm XOR needle
+	// Derive fold mask from needle (not haystack) - needle is pre-normalized
+	VADD  V4.B16, V11.B16, V15.B16  // V15 = needle + 159
+	WORD  $0x6e2f34ef               // VCMHI V15.B16, V7.B16, V15.B16 (needle_is_letter mask)
+	VAND  V8.B16, V15.B16, V15.B16  // V15 = needle_is_letter ? 0x20 : 0
+	VORR  V15.B16, V10.B16, V10.B16 // V10 = h | mask (fold only where needle is letter)
+	VEOR  V10.B16, V11.B16, V10.B16 // V10 = h_folded XOR needle
 	VAND  V13.B16, V10.B16, V10.B16 // Mask out bytes beyond needle
 	WORD  $0x6e30a94a               // VUMAXV V10.B16, V10
 	FMOVS F10, R23
