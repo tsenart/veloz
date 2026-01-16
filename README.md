@@ -83,10 +83,10 @@ idx := ascii.IndexAny("hello world", " \t\n")  // 5 (space)
 // Check if any character exists
 found := ascii.ContainsAny("hello", "aeiou")  // true
 
-// Precompute charset for repeated searches
-cs := ascii.MakeCharSet(" \t\n\r")
+// Precompute CharSet for repeated searches
+cs := ascii.NewCharSet(" \t\n\r")
 for _, line := range lines {
-    if idx := ascii.IndexAnyCharSet(line, cs); idx >= 0 {
+    if idx := cs.IndexAny(line); idx >= 0 {
         // found whitespace
     }
 }
@@ -131,9 +131,9 @@ utf8.ValidString(string([]byte{0xff}))  // false
 |----------|-------------|
 | `IndexAny(s, chars)` | Find first byte from chars |
 | `ContainsAny(s, chars)` | Check if any byte from chars exists |
-| `MakeCharSet(chars)` | Precompute character set |
-| `IndexAnyCharSet(s, cs)` | Search with precomputed CharSet |
-| `ContainsAnyCharSet(s, cs)` | Check with precomputed CharSet |
+| `NewCharSet(chars)` | Precompute character set |
+| `CharSet.IndexAny(s)` | Search with precomputed CharSet |
+| `CharSet.ContainsAny(s)` | Check with precomputed CharSet |
 
 ### Validation and Comparison
 

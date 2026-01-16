@@ -31,19 +31,24 @@ func IndexAny(s, chars string) int {
 	return indexAnyGo(s, chars)
 }
 
-// IndexAnyCharSet finds the first occurrence of any byte from cs in data.
-// Returns -1 if no match is found.
-func IndexAnyCharSet(data string, cs CharSet) int {
+// IndexAny returns the index of the first byte in s that is in the CharSet,
+// or -1 if no such byte exists.
+func (cs CharSet) IndexAny(s string) int {
 	if cs.bitset == [4]uint64{} {
 		return -1
 	}
-	for i := 0; i < len(data); i++ {
-		c := data[i]
+	for i := 0; i < len(s); i++ {
+		c := s[i]
 		if cs.bitset[c>>6]&(1<<(c&63)) != 0 {
 			return i
 		}
 	}
 	return -1
+}
+
+// ContainsAny reports whether any byte in s is in the CharSet.
+func (cs CharSet) ContainsAny(s string) bool {
+	return cs.IndexAny(s) >= 0
 }
 
 // Index finds the first occurrence of the pattern in haystack.

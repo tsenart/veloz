@@ -1,13 +1,13 @@
 package ascii
 
 // CharSet represents a precomputed character set for fast IndexAny lookups.
-// Build once with MakeCharSet, then reuse with IndexAnyCharSet.
+// Build once with NewCharSet, then reuse with cs.IndexAny().
 type CharSet struct {
 	bitset [4]uint64
 }
 
-// MakeCharSet creates a CharSet from the given characters.
-func MakeCharSet(chars string) CharSet {
+// NewCharSet creates a CharSet from the given characters.
+func NewCharSet(chars string) CharSet {
 	var cs CharSet
 	for i := 0; i < len(chars); i++ {
 		c := chars[i]
@@ -33,11 +33,6 @@ func HasSuffixFold(s, suffix string) bool {
 // ContainsAny reports whether any byte from chars is in data.
 func ContainsAny(data, chars string) bool {
 	return IndexAny(data, chars) >= 0
-}
-
-// ContainsAnyCharSet reports whether any byte from cs is in data.
-func ContainsAnyCharSet(data string, cs CharSet) bool {
-	return IndexAnyCharSet(data, cs) >= 0
 }
 
 // IndexNonASCII finds the first non-ASCII byte (>= 0x80) in the string.

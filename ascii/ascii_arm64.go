@@ -2,20 +2,25 @@
 
 package ascii
 
-// IndexAnyCharSet finds the first occurrence of any byte from cs in data.
-// Returns -1 if no match is found.
-func IndexAnyCharSet(data string, cs CharSet) int {
+// IndexAny returns the index of the first byte in s that is in the CharSet,
+// or -1 if no such byte exists.
+func (cs CharSet) IndexAny(s string) int {
 	if cs.bitset == [4]uint64{} {
 		return -1
 	}
-	if len(data) < 16 {
-		return indexAnyCharSetGo(data, cs)
+	if len(s) < 16 {
+		return cs.indexAnyGo(s)
 	}
-	return indexAnyNeonBitset(data, cs.bitset[0], cs.bitset[1], cs.bitset[2], cs.bitset[3])
+	return indexAnyNeonBitset(s, cs.bitset[0], cs.bitset[1], cs.bitset[2], cs.bitset[3])
 }
 
-// indexAnyCharSetGo is a Go fallback for small data using prebuilt CharSet.
-func indexAnyCharSetGo(s string, cs CharSet) int {
+// ContainsAny reports whether any byte in s is in the CharSet.
+func (cs CharSet) ContainsAny(s string) bool {
+	return cs.IndexAny(s) >= 0
+}
+
+// indexAnyGo is a Go fallback for small data.
+func (cs CharSet) indexAnyGo(s string) int {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if cs.bitset[c>>6]&(1<<(c&63)) != 0 {
