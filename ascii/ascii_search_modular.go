@@ -105,23 +105,33 @@ func IndexExactModular(haystack, needle string) int {
 	}
 
 	// Use first + last byte (max spread), or first + middle if first==last
+	first := needle[0]
 	off2 := n - 1
-	if n > 2 && needle[0] == needle[n-1] {
+	if n > 2 && first == needle[n-1] {
 		off2 = n / 2
 	}
 
-	// Stage 1: 1-byte filter (fast scan, adaptive threshold)
-	result := indexExact1Byte(haystack, needle, 0)
-	if !resultExceeded(result) {
-		return resultPosition(result)
+	// Skip 1-byte filter for pathological patterns:
+	// 1. first == last (like "aab", quoted strings)
+	// 2. first byte is a very common letter
+	skip1Byte := first == needle[n-1] || (first >= 'a' && first <= 'z' && byteRank[first] > 240)
+
+	var result uint64
+	var resumePos int
+
+	if !skip1Byte {
+		// Stage 1: 1-byte filter (fast scan, adaptive threshold)
+		result = indexExact1Byte(haystack, needle, 0)
+		if !resultExceeded(result) {
+			return resultPosition(result)
+		}
+		resumePos = resultPosition(result)
+		if resumePos > 0 {
+			haystack = haystack[resumePos:]
+		}
 	}
 
 	// Stage 2: 2-byte filter (more selective)
-	resumePos := resultPosition(result)
-	if resumePos > 0 {
-		haystack = haystack[resumePos:]
-	}
-
 	result = indexExact2Byte(haystack, needle, 0, off2)
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
@@ -161,21 +171,26 @@ func (s Searcher) IndexModular(haystack string) int {
 }
 
 func indexFoldModularWithOffsets(haystack, normNeedle string, off1, off2 int) int {
-	// Stage 1: 1-byte
-	result := indexFold1Byte(haystack, normNeedle, off1)
+	// Searcher already selected rare bytes via corpus analysis or selectRarePairFull.
+	// Only skip 1-byte for the pathological case where both offsets are the same.
+	skip1Byte := off1 == off2
 
-	if !resultExceeded(result) {
-		return resultPosition(result)
+	var result uint64
+	var resumePos int
+
+	if !skip1Byte {
+		result = indexFold1Byte(haystack, normNeedle, off1)
+		if !resultExceeded(result) {
+			return resultPosition(result)
+		}
+		resumePos = resultPosition(result)
+		if resumePos > 0 {
+			haystack = haystack[resumePos:]
+		}
 	}
 
 	// Stage 2: 2-byte
-	resumePos := resultPosition(result)
-	if resumePos > 0 {
-		haystack = haystack[resumePos:]
-	}
-
 	result = indexFold2Byte(haystack, normNeedle, off1, off2-off1)
-
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
 		if pos >= 0 {
@@ -191,8 +206,6 @@ func indexFoldModularWithOffsets(haystack, normNeedle string, off1, off2 int) in
 		resumePos += resumePos2
 	}
 
-	// For short needles, use brute-force (faster than RK setup)
-	// For long needles, use SIMD Rabin-Karp
 	var pos int
 	if len(normNeedle) <= 8 {
 		pos = indexFoldBruteForce(haystack, normNeedle)
@@ -218,21 +231,25 @@ func indexFoldBruteForce(haystack, normNeedle string) int {
 }
 
 func indexExactModularWithOffsets(haystack, needle string, off1, off2 int) int {
-	// Stage 1: 1-byte
-	result := indexExact1Byte(haystack, needle, off1)
+	// Searcher already selected rare bytes. Only skip 1-byte if offsets are the same.
+	skip1Byte := off1 == off2
 
-	if !resultExceeded(result) {
-		return resultPosition(result)
+	var result uint64
+	var resumePos int
+
+	if !skip1Byte {
+		result = indexExact1Byte(haystack, needle, off1)
+		if !resultExceeded(result) {
+			return resultPosition(result)
+		}
+		resumePos = resultPosition(result)
+		if resumePos > 0 {
+			haystack = haystack[resumePos:]
+		}
 	}
 
 	// Stage 2: 2-byte
-	resumePos := resultPosition(result)
-	if resumePos > 0 {
-		haystack = haystack[resumePos:]
-	}
-
 	result = indexExact2Byte(haystack, needle, off1, off2-off1)
-
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
 		if pos >= 0 {
@@ -248,8 +265,6 @@ func indexExactModularWithOffsets(haystack, needle string, off1, off2 int) int {
 		resumePos += resumePos2
 	}
 
-	// For short needles, use stdlib's brute-force (faster than RK)
-	// For long needles, use SIMD Rabin-Karp
 	var pos int
 	if len(needle) <= 8 {
 		pos = strings.Index(haystack, needle)
