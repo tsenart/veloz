@@ -10,6 +10,26 @@ import "strings"
 //   Stage 2: 2-byte filter (rare bytes at off1 and off2)
 //   Stage 3: SIMD Rabin-Karp (guaranteed linear)
 
+// Assembly kernel declarations (ascii_index_neon.s)
+
+//go:noescape
+func indexFold1Byte(haystack string, needle string, off1 int) uint64
+
+//go:noescape
+func indexExact1Byte(haystack string, needle string, off1 int) uint64
+
+//go:noescape
+func indexFold2Byte(haystack string, needle string, off1 int, off2Delta int) uint64
+
+//go:noescape
+func indexExact2Byte(haystack string, needle string, off1 int, off2Delta int) uint64
+
+//go:noescape
+func indexFold1ByteRaw(haystack string, needle string, off1 int) uint64
+
+//go:noescape
+func indexFold2ByteRaw(haystack string, needle string, off1 int, off2Delta int) uint64
+
 const (
 	exceededFlag = 1 << 63
 )

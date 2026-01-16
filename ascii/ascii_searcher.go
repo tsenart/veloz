@@ -188,7 +188,6 @@ func getRankTable(ranks []byte, caseSensitive bool) *[256]uint16 {
 	return &customFolded
 }
 
-
 // selectRarePair finds two rare bytes by scanning the entire pattern.
 // O(n) complexity - used by NewSearcher where cost is amortized over many searches.
 // Returns the two rarest bytes and their offsets, with off1 < off2.
@@ -259,12 +258,6 @@ type Searcher struct {
 	off2          int    // offset in pattern
 	caseSensitive bool   // if true, use exact matching
 }
-
-// ByteRank exposes the default frequency table for ASCII bytes (read-only).
-// Lower rank = rarer byte = better candidate for rare-byte search.
-// This table is not consulted by MakeNeedle; to customize rare-byte selection,
-// copy this table, modify it, and pass to MakeNeedleWithRanks.
-var ByteRank = byteRank
 
 // caseFoldRank is a case-insensitive rank table for rare-byte selection.
 // For letters, rank = rankUpper + rankLower (sum models P(upper OR lower)).
@@ -593,5 +586,3 @@ func indexAnyGo(s, chars string) int {
 	}
 	return -1
 }
-
-
