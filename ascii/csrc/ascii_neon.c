@@ -507,11 +507,6 @@ static const uint8_t fold_table[256] = {
     224,225,226,227,228,229,230,231,232,233,234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,254,255,
 };
 
-// Case-fold a byte using lookup table (no branches)
-static inline uint8_t fold_byte(uint8_t c) {
-    return fold_table[c];
-}
-
 // Use same prime as Go stdlib for better hash distribution
 #define PRIME_RK 16777619
 
