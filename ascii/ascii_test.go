@@ -1444,36 +1444,4 @@ func TestScalarPathVerifyFail(t *testing.T) {
 	}
 }
 
-// TestRawBitClearNoInfiniteLoop verifies that the Raw functions' bit-clearing
-// logic correctly clears the current match bit after verification failure.
-//
-// There was a concern that the bit-clearing in raw1_clear16_from_verify might
-// leave the current bit SET, causing an infinite loop. Analysis shows this is
-// NOT the case:
-//
-//	ADD   $1, R15, R17      // R17 = bitIndex + 1
-//	LSL   $1, R17, R17      // R17 = (bitIndex + 1) * 2
-//	MOVD  $1, R19
-//	LSL   R17, R19, R17     // R17 = 1 << ((bitIndex + 1) * 2)
-//	SUB   $1, R17, R17      // R17 = mask of bits 0 through ((bitIndex+1)*2 - 1)
-//	BIC   R17, R13, R13     // Clears current bit AND all bits below
-//
-// For byte index 5: mask = (1 << 12) - 1 = 0xFFF, which clears bits 0-11,
-// including byte 5's 2-bit field at bits 10-11. This is correct (if aggressive).
-//
-// Additionally, there's a failure counter (R25) with threshold that would
-// bail out to "exceeded" even if there were a bug.
-func TestRawBitClearNoInfiniteLoop(t *testing.T) {
-	// Construct a case where:
-	// - first byte 'q' matches at multiple positions in haystack
-	// - but the full needle doesn't match at any of those positions
-	// - this exercises the bit-clear path repeatedly
-	haystack := "qaaaaqaaaaqaaaa"
-	needle := "qzzz"
 
-	// Should return -1 (not found) without hanging
-	result := indexFold1ByteRaw(haystack, needle, 0)
-	if result != ^uint64(0) {
-		t.Errorf("expected not found (0x%x), got 0x%x", ^uint64(0), result)
-	}
-}

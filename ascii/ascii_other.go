@@ -55,5 +55,3 @@ func (s Searcher) Index(haystack string) int {
 	}
 	return indexFoldGo(haystack, s.raw)
 }
-
-
