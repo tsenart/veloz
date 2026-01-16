@@ -628,22 +628,36 @@ scalar_loop_exact1:
 	CMP   R9, R17
 	BGT   scalar_next_exact1
 
-	// Verify
+	// Verify with NEON
 	ADD   R0, R17, R8
 	MOVD  R8, R19
 	MOVD  R2, R20
 	MOVD  R3, R21
 
 scalar_verify_exact1:
-	MOVBU (R19), R6
-	MOVBU (R20), R7
-	CMP   R6, R7
-	BNE   scalar_fail_exact1
-	ADD   $1, R19
-	ADD   $1, R20
-	SUBS  $1, R21, R21
+	CMP   $16, R21
+	BLT   scalar_verify_tail_exact1
+	VLD1.P 16(R19), [V10.B16]
+	VLD1.P 16(R20), [V11.B16]
+	VEOR  V10.B16, V11.B16, V12.B16
+	WORD  $0x6e30a98c              // UMAXP V12.B16, V12.B16, V12.B16
+	FMOVS F12, R6
+	CBNZW R6, scalar_fail_exact1
+	SUBS  $16, R21, R21
 	BGT   scalar_verify_exact1
 	B     found_exact1
+
+scalar_verify_tail_exact1:
+	CMP   $0, R21
+	BLE   found_exact1
+	VLD1  (R19), [V10.B16]
+	VLD1  (R20), [V11.B16]
+	VEOR  V10.B16, V11.B16, V12.B16
+	WORD  $0x3cf57b0d               // LDR Q13, [R24, R21, LSL #4]
+	VAND  V13.B16, V12.B16, V12.B16
+	WORD  $0x6e30a98c
+	FMOVS F12, R6
+	CBZW  R6, found_exact1
 
 scalar_fail_exact1:
 	// Threshold = 32 + (bytes_scanned >> 3)
@@ -1333,20 +1347,39 @@ scalar_loop_exact2:
 	CMP   R9, R19
 	BGT   scalar_next_exact2
 
-	// Verify - use R20-R22, R6, R14 only (not R8 which holds rare2!)
+	// Verify with NEON - use R20-R22, R6 only (not R8 which holds rare2!)
 	ADD   R0, R19, R20        // R20 = haystack + position
 	MOVD  R2, R21             // R21 = needle
 	MOVD  R3, R22             // R22 = needle_len
 
 scalar_verify_exact2:
-	MOVBU (R20), R6
-	MOVBU (R21), R23
-	CMP   R6, R23
-	BNE   scalar_fail_exact2
-	ADD   $1, R20
-	ADD   $1, R21
-	SUBS  $1, R22, R22
+	CMP   $16, R22
+	BLT   scalar_verify_tail_exact2
+	VLD1.P 16(R20), [V10.B16]
+	VLD1.P 16(R21), [V11.B16]
+	VEOR  V10.B16, V11.B16, V12.B16
+	WORD  $0x6e30a98c              // UMAXP V12.B16, V12.B16, V12.B16
+	FMOVS F12, R6
+	CBNZW R6, scalar_fail_exact2
+	SUBS  $16, R22, R22
 	BGT   scalar_verify_exact2
+	MOVD  R19, R0
+	MOVD  R0, ret+48(FP)
+	RET
+
+scalar_verify_tail_exact2:
+	CMP   $0, R22
+	BLE   scalar_found_exact2
+	VLD1  (R20), [V10.B16]
+	VLD1  (R21), [V11.B16]
+	VEOR  V10.B16, V11.B16, V12.B16
+	WORD  $0x3cf67b0d               // LDR Q13, [R24, R22, LSL #4]
+	VAND  V13.B16, V12.B16, V12.B16
+	WORD  $0x6e30a98c
+	FMOVS F12, R6
+	CBNZW R6, scalar_fail_exact2
+
+scalar_found_exact2:
 	MOVD  R19, R0
 	MOVD  R0, ret+48(FP)
 	RET
