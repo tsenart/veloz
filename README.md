@@ -190,15 +190,17 @@ Raw benchmark data: [ascii/bench/](ascii/bench/)
 
 ### Searcher with Corpus-Tuned Ranks
 
-For JSON data, `Searcher_corpus` (using corpus-derived byte ranks) significantly outperforms default rare-byte selection:
+For JSON data, `Searcher_corpus` (using corpus-derived byte ranks) is **2x faster** than default rare-byte selection:
 
-| Platform | Index | Searcher | Searcher_corpus |
-|----------|------:|---------:|----------------:|
-| Apple M3 Max | 1.3 µs | 1.4 µs | **0.6 µs** |
-| AWS Graviton 4 | 2.7 µs | 2.9 µs | **1.6 µs** |
-| AWS Graviton 3 | 2.7 µs | 3.0 µs | **1.5 µs** |
+| Platform | Index | Searcher | Searcher_corpus | Corpus Gain |
+|----------|------:|---------:|----------------:|------------:|
+| Apple M3 Max | 1.3 µs | 1.4 µs | **0.6 µs** | **2.3x** |
+| AWS Graviton 4 | 2.7 µs | 2.9 µs | **1.6 µs** | **1.8x** |
+| AWS Graviton 3 | 2.7 µs | 3.0 µs | **1.5 µs** | **2.0x** |
 
 *64KB JSON input, case-sensitive search*
+
+**Why corpus tuning helps**: The default frequency table is derived from English text, where `"`, `:`, and `{` are rare. In JSON, these appear constantly. Corpus-tuned ranks correctly identify them as common, choosing better filter bytes.
 
 ### IndexAny: SIMD vs Pure Go
 
