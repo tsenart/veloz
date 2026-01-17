@@ -182,9 +182,9 @@ Raw benchmark data: [ascii/bench/](ascii/bench/)
 
 | Platform | 1KB | 64KB |
 |----------|----:|-----:|
-| Apple M3 Max | 38 ns | 1.8 µs |
-| AWS Graviton 4 | 67 ns | 3.4 µs |
-| AWS Graviton 3 | 71 ns | 3.8 µs |
+| Apple M3 Max | 43 ns | 1.8 µs |
+| AWS Graviton 4 | 74 ns | 3.6 µs |
+| AWS Graviton 3 | 79 ns | 4.2 µs |
 
 *"json" scenario*
 
