@@ -194,9 +194,9 @@ For JSON data, `Searcher_corpus` (using corpus-derived byte ranks) significantly
 
 | Platform | Index | Searcher | Searcher_corpus |
 |----------|------:|---------:|----------------:|
-| Apple M3 Max | 1.35 µs | 1.45 µs | **0.61 µs** |
-| AWS Graviton 4 | 2.69 µs | 2.94 µs | **1.60 µs** |
-| AWS Graviton 3 | 2.72 µs | 3.00 µs | **1.50 µs** |
+| Apple M3 Max | 1.3 µs | 1.4 µs | **0.6 µs** |
+| AWS Graviton 4 | 2.7 µs | 2.9 µs | **1.6 µs** |
+| AWS Graviton 3 | 2.7 µs | 3.0 µs | **1.5 µs** |
 
 *64KB JSON input, case-sensitive search*
 
