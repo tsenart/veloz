@@ -158,19 +158,19 @@ Raw benchmark data: [ascii/bench/](ascii/bench/)
 
 | Scenario | strings.Index | ascii.Index | Speedup |
 |----------|-------------:|------------:|--------:|
-| json | 308 ns | 24 ns | **12.6x** |
-| samechar | 408 ns | 26 ns | **15.7x** |
-| periodic | 313 ns | 25 ns | **12.3x** |
-| logdate | 556 ns | 186 ns | **3.0x** |
-| codebraces | 541 ns | 151 ns | **3.6x** |
-| hexdata | 301 ns | 200 ns | **1.5x** |
-| digits | 344 ns | 204 ns | **1.7x** |
-| match_end | 15 ns | 16 ns | 0.9x |
-| match_mid | 10 ns | 16 ns | 0.7x |
-| rarebyte | 16 ns | 17 ns | 0.9x |
-| needle3 | 16 ns | 24 ns | 0.7x |
-| dna | 16 ns | 16 ns | 1.0x |
-| notfound | 14 ns | 14 ns | 1.0x |
+| json | 309 ns (3.3 GB/s) | 24 ns (42 GB/s) | **12.9x** |
+| samechar | 394 ns (2.5 GB/s) | 25 ns (40 GB/s) | **15.8x** |
+| periodic | 315 ns (3.2 GB/s) | 25 ns (40 GB/s) | **12.6x** |
+| logdate | 533 ns (1.9 GB/s) | 177 ns (5.6 GB/s) | **3.0x** |
+| codebraces | 510 ns (2.0 GB/s) | 147 ns (7.0 GB/s) | **3.5x** |
+| hexdata | 275 ns (3.6 GB/s) | 192 ns (5.1 GB/s) | **1.4x** |
+| digits | 320 ns (3.1 GB/s) | 193 ns (5.2 GB/s) | **1.7x** |
+| match_end | 16 ns (63 GB/s) | 17 ns (60 GB/s) | 0.9x |
+| match_mid | 11 ns (91 GB/s) | 16 ns (63 GB/s) | 0.7x |
+| rarebyte | 16 ns (63 GB/s) | 17 ns (60 GB/s) | 0.9x |
+| needle3 | 16 ns (63 GB/s) | 24 ns (42 GB/s) | 0.7x |
+| dna | 16 ns (63 GB/s) | 16 ns (63 GB/s) | 1.0x |
+| notfound | 14 ns (74 GB/s) | 14 ns (74 GB/s) | 1.0x |
 
 *Apple M3 Max. Scenarios where stdlib is faster have speedup < 1.0x.*
 
@@ -182,9 +182,9 @@ Raw benchmark data: [ascii/bench/](ascii/bench/)
 
 | Platform | 1KB | 64KB |
 |----------|----:|-----:|
-| Apple M3 Max | 43 ns | 1.8 µs |
-| AWS Graviton 4 | 74 ns | 3.6 µs |
-| AWS Graviton 3 | 79 ns | 4.2 µs |
+| Apple M3 Max | 43 ns (23 GB/s) | 1.8 µs (35 GB/s) |
+| AWS Graviton 4 | 74 ns (14 GB/s) | 3.6 µs (18 GB/s) |
+| AWS Graviton 3 | 79 ns (13 GB/s) | 4.2 µs (16 GB/s) |
 
 *"json" scenario*
 
@@ -204,9 +204,9 @@ For JSON data, `Searcher_corpus` (using corpus-derived byte ranks) significantly
 
 | Chars in set | Pure Go | ascii.IndexAny | Speedup |
 |-------------:|--------:|---------------:|--------:|
-| 1 | 381 ns | 32 ns | **12x** |
-| 16 | 404 ns | 45 ns | **9x** |
-| 64 | 490 ns | 143 ns | **3.4x** |
+| 1 | 381 ns (2.7 GB/s) | 32 ns (32 GB/s) | **12x** |
+| 16 | 404 ns (2.5 GB/s) | 45 ns (23 GB/s) | **9x** |
+| 64 | 490 ns (2.1 GB/s) | 143 ns (7 GB/s) | **3.4x** |
 
 *Apple M3 Max, 1KB input, match not found*
 
