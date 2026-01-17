@@ -197,14 +197,29 @@ func selectRarePair(pattern string, ranks []byte, caseSensitive bool) (rare1 byt
 		return 0, 0, 0, 0
 	}
 
+	if n == 1 {
+		b := pattern[0]
+		if !caseSensitive {
+			b = toLower(b)
+		}
+		return b, 0, b, 0
+	}
+
+	// For case-sensitive search without corpus ranks, use first+last byte strategy
+	// (same as Index function). This maximizes spread and avoids corpus assumptions.
+	if caseSensitive && ranks == nil {
+		first := pattern[0]
+		last := pattern[n-1]
+		off2 = n - 1
+		if n > 2 && first == last {
+			off2 = n / 2
+		}
+		return first, 0, pattern[off2], off2
+	}
+
 	normalize := toLower
 	if caseSensitive {
 		normalize = func(b byte) byte { return b }
-	}
-
-	if n == 1 {
-		b := normalize(pattern[0])
-		return b, 0, b, 0
 	}
 
 	rankTable := getRankTable(ranks, caseSensitive)

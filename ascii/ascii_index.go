@@ -62,39 +62,34 @@ func IndexFold(haystack, needle string) int {
 		return -1
 	}
 
-	// Use first + last byte (max spread), or first + middle if first==last
-	first := toLower(needle[0])
-	last := toLower(needle[n-1])
-
 	// Quick check for position-0 match - avoids SIMD setup overhead
+	first := toLower(needle[0])
 	if toLower(haystack[0]) == first && EqualFold(haystack[:n], needle) {
 		return 0
 	}
-	off2 := n - 1
-	if n > 2 && first == last {
-		off2 = n / 2
-	}
+
+	// Find the two rarest bytes in needle for filtering.
+	// This is the key optimization from memchr - scan needle O(n) to pick
+	// bytes that will have fewest false positives.
+	off1, off2 := findRarePairForFilter(needle)
+	filterByte1 := toLower(needle[off1])
 
 	// For long needles with common filter bytes, use Rabin-Karp directly.
-	// Byte filtering degrades to O(n*m) when filter bytes match frequently.
-	// Rabin-Karp maintains O(n+m) with rolling hash.
-	filterByte2 := toLower(needle[off2])
-	if n > 64 && byteRank[first] > 180 && byteRank[filterByte2] > 180 {
+	if n > 64 && byteRank[filterByte1] > 180 {
 		return indexFoldRabinKarp(haystack, needle)
 	}
 
-	// Skip 1-byte filter for pathological patterns:
-	// - first byte is very common (rank > 240: space, e, t, a, i, n, s, o, l, r)
-	// - first == last AND first is moderately common (rank > 160: covers quotes)
-	// - small inputs (< 2KB): 2-byte filter is more robust against corpus-specific pathological cases
-	skip1Byte := len(haystack) < 2048 || byteRank[first] > 240 || (first == last && byteRank[first] > 160)
+	// Skip 1-byte filter:
+	// - small inputs (< 2KB): 2-byte filter is more robust
+	// - filter byte is very common (rank > 200): too many false positives
+	skip1Byte := len(haystack) < 2048 || byteRank[filterByte1] > 200
 
 	var result uint64
 	var resumePos int
 
 	if !skip1Byte {
-		// Stage 1: 1-byte filter (fast scan, adaptive threshold)
-		result = indexFold1ByteRaw(haystack, needle, 0)
+		// Stage 1: 1-byte filter on rarest byte
+		result = indexFold1ByteRaw(haystack, needle, off1)
 		if !resultExceeded(result) {
 			return resultPosition(result)
 		}
@@ -104,8 +99,8 @@ func IndexFold(haystack, needle string) int {
 		}
 	}
 
-	// Stage 2: 2-byte filter (more selective)
-	result = indexFold2ByteRaw(haystack, needle, 0, off2)
+	// Stage 2: 2-byte filter using both rare bytes
+	result = indexFold2ByteRaw(haystack, needle, off1, off2-off1)
 	if !resultExceeded(result) {
 		pos := resultPosition(result)
 		if pos >= 0 {
@@ -126,6 +121,49 @@ func IndexFold(haystack, needle string) int {
 		return pos + resumePos
 	}
 	return -1
+}
+
+// findRarePairForFilter finds two rare byte offsets for SIMD filtering.
+// Returns (off1, off2) where off1 <= off2, picking bytes with lowest byteRank.
+func findRarePairForFilter(needle string) (off1, off2 int) {
+	n := len(needle)
+	if n <= 2 {
+		return 0, n - 1
+	}
+
+	// Find the two rarest distinct bytes using byteRank
+	off1, off2 = 0, n-1
+	best1Rank := byteRank[toLower(needle[0])]
+	best2Rank := byte(255)
+	best1Char := toLower(needle[0])
+
+	for i := 1; i < n; i++ {
+		c := toLower(needle[i])
+		r := byteRank[c]
+		if r < best1Rank {
+			// New rarest - demote old best1 to best2 if different char
+			if c != best1Char {
+				off2, best2Rank = off1, best1Rank
+			}
+			off1, best1Rank, best1Char = i, r, c
+		} else if c != best1Char && r < best2Rank {
+			off2, best2Rank = i, r
+		}
+	}
+
+	// Ensure off1 <= off2 for positive delta
+	if off1 > off2 {
+		off1, off2 = off2, off1
+		best1Rank, best2Rank = best2Rank, best1Rank
+	}
+
+	// If offsets are adjacent and both bytes are common, use first+last spread instead.
+	// Adjacent rare bytes provide poor selectivity in periodic patterns like "abcdabcd...".
+	if off2-off1 <= 1 && best1Rank > 200 && best2Rank > 200 {
+		return 0, n - 1
+	}
+
+	return off1, off2
 }
 
 // Index finds the first case-sensitive match of needle in haystack.
