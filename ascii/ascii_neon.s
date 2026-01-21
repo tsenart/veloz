@@ -8,6 +8,91 @@
 
 #include "textflag.h"
 
+DATA LCPI_INDEXANY<>+0x00(SB)/8, $0x8040201008040201
+DATA LCPI_INDEXANY<>+0x08(SB)/8, $0x8040201008040201
+GLOBL LCPI_INDEXANY<>(SB), (RODATA|NOPTR), $16
+
+TEXT ·indexAnyNeonBitset(SB), NOSPLIT, $0-56
+        MOVD  data+0(FP), R0
+        MOVD  data_len+8(FP), R1
+        MOVD  bitset0+16(FP), R2
+        MOVD  bitset1+24(FP), R3
+        MOVD  bitset2+32(FP), R4
+        MOVD  bitset3+40(FP), R5
+        CBZ   R1, indexany_not_found
+        CMP   $16, R1
+        AND   $15, R1, R8
+        MOVD  R0, R9
+        BLT   indexany_tail
+        FMOVD R2, F0
+        FMOVD R3, F2
+        MOVD  $LCPI_INDEXANY<>(SB), R9
+        ADD   R1, R0, R11
+        WORD  $0x3dc00123        // FMOVQ (R9), F3
+        MOVD  ZR, R10
+        SUB   R8, R11, R11
+        VMOV  V2.D[0], V0.D[1]
+        FMOVD R5, F2
+        FMOVD R4, F1
+        VMOV  V2.D[0], V1.D[1]
+        WORD  $0x4f00e4e2        // VMOVI $7, V2.B16
+
+indexany_loop:
+        WORD   $0x3cea6804                      // FMOVQ (R0)(R10), F4
+        WORD   $0x6f0d0485                      // VUSHR $3, V4.B16, V5.B16
+        VAND   V2.B16, V4.B16, V4.B16
+        VTBL   V5.B16, [V0.B16, V1.B16], V5.B16
+        VTBL   V4.B16, [V3.B16], V4.B16
+        VCMTST V5.B16, V4.B16, V4.B16
+        WORD   $0x0f0c8484                      // VSHRN $4, V4.H8, V4.B8
+        FMOVD  F4, R9
+        CBNZ   R9, indexany_found_simd
+        ADD    $16, R10, R10
+        ADD    R10, R0, R9
+        CMP    R11, R9
+        BCC    indexany_loop
+
+indexany_tail:
+        CBZ R8, indexany_not_found
+        SUB R0, R9, R0
+
+indexany_tail_loop:
+        WORD $0x3840152a  // MOVBU.P 1(R9), R10
+        LSRW $6, R10, R12
+        CMPW $1, R12
+        BGT  indexany_tail_gt1
+        MOVD R2, R11
+        CBZW R12, indexany_tail_check
+        MOVD R3, R11
+        JMP  indexany_tail_check
+
+indexany_tail_gt1:
+        CMPW $2, R12
+        MOVD R4, R11
+        BEQ  indexany_tail_check
+        MOVD R5, R11
+
+indexany_tail_check:
+        LSR  R10, R11, R10
+        TBNZ $0, R10, indexany_done
+        SUBS $1, R8, R8
+        ADD  $1, R0, R0
+        BNE  indexany_tail_loop
+
+indexany_not_found:
+        MOVD $-1, R0
+
+indexany_done:
+        MOVD R0, ret+48(FP)
+        RET
+
+indexany_found_simd:
+        RBIT R9, R8
+        CLZ  R8, R8
+        ADD  R8>>2, R10, R0
+        MOVD R0, ret+48(FP)
+        RET
+
 TEXT ·ValidString(SB), NOSPLIT, $0-17
 	MOVD data+0(FP), R0
 	MOVD length+8(FP), R1
