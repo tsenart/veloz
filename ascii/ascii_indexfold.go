@@ -2,6 +2,8 @@
 
 package ascii
 
+import "github.com/mhr3/veloz/internal/bytealg"
+
 // Staged NEON kernels for case-insensitive substring search.
 // Architecture:
 //   Stage 1: 1-byte filter (rare byte at off1)
@@ -147,4 +149,9 @@ func findRarePairForFilter(needle string) (off1, off2 int) {
 	}
 
 	return off1, off2
+}
+
+// Index finds the first case-sensitive match of needle in haystack.
+func Index(haystack, needle string) int {
+	return bytealg.Index(haystack, needle)
 }

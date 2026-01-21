@@ -2,6 +2,8 @@
 
 package ascii
 
+import "github.com/mhr3/veloz/internal/bytealg"
+
 func ValidString(s string) bool {
 	return indexMaskGo(s, 0x80) == -1
 }
@@ -20,4 +22,9 @@ func IndexFold(a, b string) int {
 
 func indexFoldRabinKarp(a, b string) int {
 	return indexFoldGo(a, b)
+}
+
+// Index finds the first case-sensitive match of needle in haystack.
+func Index(haystack, needle string) int {
+	return bytealg.Index(haystack, needle)
 }
