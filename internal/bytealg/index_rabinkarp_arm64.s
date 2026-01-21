@@ -2,6 +2,18 @@
 
 #include "textflag.h"
 
+DATA LCPI5_0<>+0x00(SB)/4, $0xd38c7031
+DATA LCPI5_0<>+0x04(SB)/4, $0x5d615f21
+DATA LCPI5_0<>+0x08(SB)/4, $0x502c3f11
+DATA LCPI5_0<>+0x0c(SB)/4, $0x00000001
+GLOBL LCPI5_0<>(SB), (RODATA|NOPTR), $16
+
+DATA LCPI5_1<>+0x00(SB)/4, $0xe3c5b6c1
+DATA LCPI5_1<>+0x04(SB)/4, $0x447c1481
+DATA LCPI5_1<>+0x08(SB)/4, $0x345b8241
+DATA LCPI5_1<>+0x0c(SB)/4, $0x00000001
+GLOBL LCPI5_1<>(SB), (RODATA|NOPTR), $16
+
 TEXT ·indexExactRabinKarp(SB), 0, $32-40
 	MOVD haystack+0(FP), R0
 	MOVD haystack_len+8(FP), R1
